@@ -1,7 +1,15 @@
 "use client";
 
 import { ChevronRight, Moon, ShieldAlert, Sun } from "lucide-react";
+import StarBorder from "../StarBorder";
 import { crew, type CrewMember } from "./health-data";
+
+const starColors: Record<string, string> = {
+  mint: "#5CF2C0",
+  blue: "#7AB0FF",
+  amber: "#FFB65C",
+  rose: "#FF9FBA",
+};
 
 function HomePage({
   dark,
@@ -30,8 +38,7 @@ function HomePage({
     <section className="home-page">
       <div className="home-top">
         <div className="earth-time">
-          <span className="live-dot" /> EARTH · UTC{" "}
-          <b>{earthTime}</b>
+          <span className="live-dot" /> EARTH · UTC <b>{earthTime}</b>
         </div>
         <button
           className="icon-button theme-button"
@@ -53,11 +60,29 @@ function HomePage({
 
         <div className="crew-grid">
           {crew.map((person, index) => (
-            <button
+            <StarBorder
               key={person.name}
               className={`crew-card ${person.color}`}
               onClick={() => onOpenPerson(person)}
               style={{ animationDelay: `${index * 80}ms` }}
+              color={starColors[person.color] ?? (dark ? "#ffffff" : "#334155")}
+              trailColor={
+                starColors[person.color] ?? (dark ? "#ffffff" : "#334155")
+              }
+              duration={4}
+              direction="clockwise"
+              stars={1}
+              trailLength={0.3}
+              thickness={1}
+              radius={20}
+              glow={0.6}
+              hover="lap"
+              sparkle={false}
+              clickPulse
+              theme={dark ? "dark" : "light"}
+              backgroundColor="var(--surface)"
+              textColor="var(--text)"
+              borderColor="var(--border)"
             >
               <span className="avatar">{person.initials}</span>
               <span className="crew-copy">
@@ -65,7 +90,7 @@ function HomePage({
                 <small>{person.role}</small>
               </span>
               <ChevronRight className="crew-chevron" />
-            </button>
+            </StarBorder>
           ))}
         </div>
 

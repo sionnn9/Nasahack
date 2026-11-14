@@ -1,44 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { bodyAreas, type BodyArea } from "./health-data";
 
-function Particles() {
-  const [dots, setDots] = useState<
-    Array<{ x: number; y: number; r: number; d: number; h: number }>
-  >([]);
-
-  useEffect(() => {
-    const count = window.innerWidth < 600 ? 35 : 60;
-    setDots(
-      Array.from({ length: count }, () => ({
-        x: Math.random() * 100,
-        y: Math.random() * 100,
-        r: Math.random() * 2 + 1,
-        d: Math.random() * 8 + 4,
-        h: Math.random(),
-      })),
-    );
-  }, []);
-
-  return (
-    <div className="stars" aria-hidden="true">
-      {dots.map((dot, index) => (
-        <i
-          key={index}
-          style={{
-            left: `${dot.x}%`,
-            top: `${dot.y}%`,
-            width: dot.r,
-            height: dot.r,
-            animationDuration: `${dot.d}s`,
-            opacity: 0.2 + dot.h * 0.45,
-          }}
-        />
-      ))}
-    </div>
-  );
-}
+export { Particles } from "./particles";
 
 function BodyMap({
   selected,
@@ -59,7 +23,13 @@ function BodyMap({
   };
   const callouts: Record<
     Exclude<BodyArea, "Radiation">,
-    { x: number; y: number; textX: number; textY: number; side: "left" | "right" }
+    {
+      x: number;
+      y: number;
+      textX: number;
+      textY: number;
+      side: "left" | "right";
+    }
   > = {
     Head: { x: 235, y: 42, textX: 243, textY: 38, side: "right" },
     Heart: { x: 235, y: 123, textX: 243, textY: 127, side: "right" },
@@ -238,4 +208,4 @@ function LineChart({
   );
 }
 
-export { BodyMap, LineChart, Particles };
+export { BodyMap, LineChart };
