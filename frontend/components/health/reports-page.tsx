@@ -1,402 +1,318 @@
 "use client";
 
-import {
-  ArrowLeft,
-  Download,
-  LockKeyhole,
-  Moon,
-  Send,
-  ShieldAlert,
-  Sun,
-  WifiOff,
-} from "lucide-react";
-import {
-  computeWellbeingScore,
-  formatSleep,
-  moodLabel,
-  radiationDisclaimer,
-  radiationSamples,
-  radiationUnit,
-  type CrewMember,
-  type DailyCheckIn,
-  type LiveVitals,
-  type SensorQuality,
-} from "./health-data";
+import { useMemo, useState } from "react";
+import Link from "next/link";
+import { Download, Printer, Send, ShieldCheck } from "lucide-react";
+import { CrewNav } from "@/components/health/crew-nav";
+import { LaneBadge } from "@/components/health/status-chip";
+import { TrustRing } from "@/components/health/trust-ring";
+import { formatValue, metricMeta } from "@/lib/metrics";
+import { buildHandoff, summariseHandoff } from "@/lib/handoff/build";
+import { environmentFor, missionConfig } from "@/lib/mission-config";
+import { useStore } from "@/lib/store";
+import type { Handoff } from "@/lib/types";
 
-function ReportsPage({
-  astronaut,
-  checkIn,
-  vitals,
-  quality,
-  time,
-  dark,
-  offline,
-  includePrivate,
-  hasAstronaut,
-  onEdit,
-  onBack,
-  onSetPage,
-  onThemeToggle,
-  onSendEmergency,
-  onToggleOffline,
-  onTogglePrivate,
-  onSend,
-}: {
-  astronaut: CrewMember;
-  checkIn: DailyCheckIn;
-  vitals: LiveVitals;
-  quality: SensorQuality;
-  time: Date;
-  dark: boolean;
-  offline: boolean;
-  includePrivate: boolean;
-  hasAstronaut: boolean;
-  onEdit: () => void;
-  onBack: () => void;
-  onSetPage: (page: "daily" | "reports") => void;
-  onThemeToggle: () => void;
-  onSendEmergency: () => void;
-  onToggleOffline: (value: boolean) => void;
-  onTogglePrivate: (value: boolean) => void;
-  onSend: () => void;
-}) {
-  const score = computeWellbeingScore(checkIn);
-  const sensorValue = (value: string) =>
-    quality === "Usable" ? value : "No valid reading";
-  const report = {
-    astronaut: astronaut.name,
-    role: astronaut.role,
-    generatedAt: time.toISOString(),
-    readings: {
-      heartRate: {
-        value: sensorValue(String(vitals.heartRate)),
-        unit: "bpm",
-        source: "Live sensor",
-        status: quality,
-      },
-      skinTemperature: {
-        value: sensorValue(vitals.skinTemperature.toFixed(1)),
-        unit: "°C",
-        source: "Live sensor",
-        status: quality,
-      },
-      bloodPressure: {
-        value: sensorValue(`${vitals.systolic} / ${vitals.diastolic}`),
-        unit: "mmHg",
-        source: "Live sensor",
-        status: quality,
-      },
-      motion: {
-        value: sensorValue(vitals.motion.toFixed(2)),
-        unit: "g",
-        source: "Live sensor",
-        status: quality,
-      },
-      sleep: { value: formatSleep(checkIn), source: "Entered by you" },
-      bloodSugar: {
-        value: checkIn.bloodSugar || "Not entered yet",
-        unit: "mg/dL",
-        source: "Entered by you",
-      },
-      stress: {
-        value: checkIn.stress ? `${checkIn.stress} / 5` : "Not entered yet",
-        source: "Entered by you",
-      },
-      rested: {
-        value: checkIn.rested ? `${checkIn.rested} / 5` : "Not entered yet",
-        source: "Entered by you",
-      },
-      connected: {
-        value: checkIn.connected
-          ? `${checkIn.connected} / 5`
-          : "Not entered yet",
-        source: "Entered by you",
-      },
-      radiation: {
-        value: radiationSamples[radiationSamples.length - 1].toFixed(1),
-        unit: radiationUnit,
-        source: "Static sample data",
-        note: radiationDisclaimer,
-      },
-    },
-    symptoms: checkIn.symptoms,
-    details: checkIn.details,
-    simulated: true,
-    ...(includePrivate
-      ? {
-          mood: {
-            value: checkIn.mood ? moodLabel(checkIn.mood) : "Not entered yet",
-            source: "Entered by you · Private",
-          },
-          wellbeing: {
-            value: score === null ? "Not enough answers yet" : `${score} / 100`,
-            source: "Average of four self-reported answers",
-          },
-        }
-      : {}),
-  };
+export function ReportsPage() {
+  const observations = useStore((state) => state.observations);
+  const checkIns = useStore((state) => state.checkIns);
+  const encounters = useStore((state) => state.encounters);
+  const environment = useStore((state) => state.environment);
+  const enqueue = useStore((state) => state.enqueue);
+  const notify = useStore((state) => state.notify);
 
-  const downloadReport = () => {
-    const blob = new Blob([JSON.stringify(report, null, 2)], {
+  const [crewId, setCrewId] = useState(missionConfig.crew[0].id);
+  const [encounterId, setEncounterId] = useState<string>("");
+  const [includePrivate, setIncludePrivate] = useState(false);
+  const [notes, setNotes] = useState("");
+
+  const crewEncounters = encounters.filter((entry) => entry.crewId === crewId);
+  const encounter =
+    crewEncounters.find((entry) => entry.id === encounterId) ?? crewEncounters[0] ?? null;
+  const latestCheckIn =
+    checkIns
+      .filter((entry) => entry.crewId === crewId)
+      .sort((a, b) => (a.observedAt < b.observedAt ? 1 : -1))[0] ?? null;
+
+  const handoff: Handoff = useMemo(
+    () =>
+      buildHandoff({
+        crewId,
+        encounter,
+        checkIn: latestCheckIn,
+        observations,
+        includePrivate,
+        notes,
+      }),
+    [crewId, encounter, latestCheckIn, observations, includePrivate, notes],
+  );
+
+  const summary = summariseHandoff(handoff);
+  const emergencyEncounters = encounters.filter(
+    (entry) => entry.kind === "emergency" && entry.crewId === crewId,
+  );
+  const member = missionConfig.crew.find((entry) => entry.id === crewId)!;
+
+  const download = () => {
+    const blob = new Blob([JSON.stringify({ handoff, summary }, null, 2)], {
       type: "application/json",
     });
+    const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
-    anchor.href = URL.createObjectURL(blob);
-    anchor.download = "crewsignal-report.json";
+    anchor.href = url;
+    anchor.download = `crewsignal-handoff-${crewId}.json`;
     anchor.click();
-    URL.revokeObjectURL(anchor.href);
+    URL.revokeObjectURL(url);
+  };
+
+  const queue = async () => {
+    const now = new Date().toISOString();
+    const preset = environmentFor(environment);
+    await enqueue({
+      id: `handoff-${handoff.id}-${Date.now()}`,
+      crewId,
+      kind: "handoff",
+      createdAt: now,
+      sentAt: null,
+      acknowledgedAt: null,
+      state: "queued",
+      delaySeconds: preset.delaySeconds,
+      title: `Handoff · ${member.name}`,
+      payload: handoff,
+      private: includePrivate,
+      history: [
+        {
+          state: "queued",
+          at: now,
+          note: "Queued on board. Nothing has been sent yet.",
+        },
+      ],
+    });
+    notify("Handoff queued in the outbox. Delivery state is shown honestly.", "ok");
   };
 
   return (
-    <>
-      <nav className="nav-bar">
-        <button className="back-link" onClick={onBack}>
-          <ArrowLeft /> {hasAstronaut ? "Daily check" : "Home"}
-        </button>
-        <span className="nav-time">
-          EARTH UTC{" "}
-          <b>
-            {time.toLocaleTimeString("en-GB", {
-              timeZone: "UTC",
-              hour: "2-digit",
-              minute: "2-digit",
-            })}
-          </b>
-        </span>
-        <div className="nav-tabs">
-          {hasAstronaut && (
-            <button onClick={() => onSetPage("daily")}>
-              Daily check &amp; trends
-            </button>
-          )}
-          <button className="active" onClick={() => onSetPage("reports")}>
-            Reports
-          </button>
-        </div>
-        <div className="nav-actions">
-          <button
-            className="icon-button"
-            onClick={onThemeToggle}
-            aria-label="Toggle theme"
-          >
-            {dark ? <Sun /> : <Moon />}
-          </button>
-          <button className="nav-emergency" onClick={onSendEmergency}>
-            <ShieldAlert /> Emergency
-          </button>
-        </div>
-      </nav>
-
-      <section className="reports-page">
-      <div className="welcome-row">
+    <section className="reports-page">
+      <CrewNav />
+      <header className="reports-head">
         <div>
-          <div className="eyebrow">CREW HEALTH · REPORT</div>
-          <h1>Daily report</h1>
-          <p className="subtle">
-            A clear summary for your crew and Earth. All readings are simulated.
+          <p className="illustrative-label">HANDOFF PACKET — REVIEW BEFORE SHARING</p>
+          <h1>Prepare a handoff</h1>
+          <p className="assessment-sub">
+            You choose what is shared. Private answers stay off unless you tick them.
           </p>
         </div>
-
-        <div className="welcome-actions">
-          <button className="secondary-button" onClick={onEdit}>
-            Edit report
+        <div className="reports-actions no-print">
+          <button type="button" className="secondary-button" onClick={() => window.print()}>
+            <Printer aria-hidden="true" /> Print / PDF
           </button>
-          <button className="secondary-button" onClick={downloadReport}>
-            <Download /> Download JSON
+          <button type="button" className="secondary-button" onClick={download}>
+            <Download aria-hidden="true" /> Download JSON
           </button>
-          <button
-            className="primary-button"
-            disabled={offline}
-            onClick={onSend}
-          >
-            {offline ? (
-              <>
-                <WifiOff /> Offline: download only
-              </>
-            ) : (
-              <>
-                <Send /> Send to Earth
-              </>
-            )}
+          <button type="button" className="primary-button" onClick={() => void queue()}>
+            <Send aria-hidden="true" /> Queue for Earth
           </button>
         </div>
-      </div>
+      </header>
 
-      <div className="report-controls report-privacy-controls">
-        <label className="toggle-row">
-          <input
-            type="checkbox"
-            checked={offline}
-            onChange={(event) => onToggleOffline(event.target.checked)}
-          />
-          Pretend I&apos;m offline (demo)
+      <div className="report-controls no-print">
+        <label>
+          Crew member
+          <select
+            value={crewId}
+            onChange={(event) => {
+              setCrewId(event.target.value);
+              setEncounterId("");
+            }}
+          >
+            {missionConfig.crew.map((entry) => (
+              <option key={entry.id} value={entry.id}>
+                {entry.name}
+              </option>
+            ))}
+          </select>
         </label>
-        <label className="toggle-row">
+        <label>
+          Source
+          <select value={encounter?.id ?? ""} onChange={(event) => setEncounterId(event.target.value)}>
+            <option value="">Latest check-in{encounter ? " + latest encounter" : ""}</option>
+            {crewEncounters.map((entry) => (
+              <option key={entry.id} value={entry.id}>
+                {entry.kind} · {new Date(entry.startedAt).toLocaleString("en-GB", {
+                  timeZone: "UTC",
+                  day: "2-digit",
+                  month: "short",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}{" "}
+                UTC
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="checkbox-row">
           <input
             type="checkbox"
             checked={includePrivate}
-            onChange={(event) => onTogglePrivate(event.target.checked)}
+            onChange={(event) => setIncludePrivate(event.target.checked)}
           />
-          <LockKeyhole size={14} />
-          Include mood and wellbeing
+          Include mood, stress, rested and connected
         </label>
-        <span className="queued">
-          <span className="queued-dot" />
-          {offline ? "Queued, not sent" : "Ready to send"}
-        </span>
+        <label className="report-notes">
+          Note to the flight surgeon
+          <textarea rows={2} value={notes} onChange={(event) => setNotes(event.target.value)} />
+        </label>
       </div>
 
-      <div className="report-grid">
-        <article className="report-card">
-          <div className="report-title">
-            <span className="report-number">01</span>
-            <h2>Crew member</h2>
-          </div>
-          <ReportLine label="Name" value={astronaut.name} />
-          <ReportLine label="Role" value={astronaut.role} />
-          <ReportLine label="Mission day" value="184" />
-          <ReportLine
-            label="Report time"
-            value={`${time.toLocaleString("en-GB", {
-              timeZone: "UTC",
-              dateStyle: "medium",
-              timeStyle: "short",
-            })} UTC`}
-          />
-        </article>
+      <article className="report-card">
+        <h2>
+          <span className="report-number">01</span> Who and when
+        </h2>
+        <p>
+          {member.name} · {member.role} · {missionConfig.missionName}, day{" "}
+          {missionConfig.missionDay}. Prepared{" "}
+          {new Date(handoff.createdAt).toLocaleString("en-GB", {
+            timeZone: "UTC",
+            day: "2-digit",
+            month: "short",
+            hour: "2-digit",
+            minute: "2-digit",
+          })}{" "}
+          UTC.
+        </p>
+        <p>Recipients: {handoff.recipients.join(", ")}.</p>
+      </article>
 
-        <article className="report-card">
-          <div className="report-title">
-            <span className="report-number">02</span>
-            <h2>Live sensors</h2>
-          </div>
-          <ReportLine
-            label="Heart rate · Live sensor"
-            value={`${sensorValue(String(vitals.heartRate))} ${quality === "Usable" ? "bpm" : ""} · ${quality}`}
-          />
-          <ReportLine
-            label="Skin temperature · Live sensor"
-            value={`${sensorValue(vitals.skinTemperature.toFixed(1))} ${quality === "Usable" ? "°C" : ""} · ${quality}`}
-          />
-          <ReportLine
-            label="Blood pressure · Live sensor"
-            value={`${sensorValue(`${vitals.systolic} / ${vitals.diastolic}`)} ${quality === "Usable" ? "mmHg" : ""} · ${quality}`}
-          />
-          <ReportLine
-            label="Motion · Live sensor"
-            value={`${sensorValue(vitals.motion.toFixed(2))} ${quality === "Usable" ? "g" : ""} · ${quality}`}
-          />
-        </article>
-
-        <article className="report-card">
-          <div className="report-title">
-            <span className="report-number">03</span>
-            <h2>Entered by you</h2>
-          </div>
-          <ReportLine label="Sleep" value={formatSleep(checkIn)} />
-          <ReportLine
-            label="Blood sugar"
-            value={
-              checkIn.bloodSugar
-                ? `${checkIn.bloodSugar} mg/dL`
-                : "Not entered yet"
-            }
-          />
-          <ReportLine
-            label="Stress"
-            value={checkIn.stress ? `${checkIn.stress} / 5` : "Not entered yet"}
-          />
-          <ReportLine
-            label="Rested"
-            value={checkIn.rested ? `${checkIn.rested} / 5` : "Not entered yet"}
-          />
-          <ReportLine
-            label="Connected to crew"
-            value={
-              checkIn.connected
-                ? `${checkIn.connected} / 5`
-                : "Not entered yet"
-            }
-          />
-          <ReportLine
-            label="Symptoms"
-            value={checkIn.symptoms.length ? checkIn.symptoms.join(", ") : "None reported"}
-          />
-          {checkIn.details && <ReportLine label="Details" value={checkIn.details} />}
-          <p className="source-caption">
-            Source: Entered by you
-            {checkIn.enteredAt ? ` · ${checkIn.enteredAt} UTC` : ""}
-          </p>
-        </article>
-
-        <article className="report-card">
-          <div className="report-title">
-            <span className="report-number">04</span>
-            <h2>Static data</h2>
-          </div>
-          <ReportLine
-            label="Radiation · Static sample data"
-            value={`${radiationSamples[radiationSamples.length - 1].toFixed(1)} ${radiationUnit}`}
-          />
-          <p className="radiation-disclaimer">{radiationDisclaimer}</p>
-        </article>
-
-        {includePrivate && (
-          <article className="report-card">
-            <div className="report-title">
-              <span className="report-number">05</span>
-              <h2>Private wellbeing</h2>
-            </div>
-            <>
-              <ReportLine
-                label="Mood · Entered by you"
-                value={checkIn.mood ? moodLabel(checkIn.mood) : "Not entered yet"}
-              />
-              <ReportLine
-                label="Wellbeing check-in"
-                value={
-                  score === null
-                    ? "Not enough answers yet"
-                    : `${score} / 100`
-                }
-              />
-              <p className="source-caption">
-                Average of four self-reported answers. Included because you
-                opted in.
-              </p>
-            </>
-          </article>
+      <article className="report-card">
+        <h2>
+          <span className="report-number">02</span> Reported symptoms
+        </h2>
+        {handoff.symptoms.length === 0 ? (
+          <p>No symptoms reported.</p>
+        ) : (
+          <ul className="report-list">
+            {handoff.symptoms.map((symptom) => (
+              <li key={symptom.id}>
+                <strong>{symptom.name}</strong> — started {symptom.onset.replace(/_/g, " ")},
+                trend {symptom.trend}
+                {symptom.urgent && <span className="urgent-tag">Needs attention</span>}
+              </li>
+            ))}
+          </ul>
         )}
-
-        <article className="report-card summary-report">
-          <div className="report-title">
-            <span className="report-number">05</span>
-            <h2>Summary</h2>
+        {emergencyEncounters.length > 0 && (
+          <div className="emergency-report">
+            <h3>Emergency situation report</h3>
+            {emergencyEncounters.slice(0, 2).map((entry) => (
+              <p key={entry.id}>
+                {new Date(entry.startedAt).toLocaleString("en-GB", {
+                  timeZone: "UTC",
+                  day: "2-digit",
+                  month: "short",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}{" "}
+                UTC — {entry.pathwayId}, outcome {entry.outcome}.{" "}
+                {entry.actions.map((action) => action.text).join(" ") || "No actions logged."}
+              </p>
+            ))}
           </div>
-          <p>
-            {astronaut.name} completed a simulated daily health check. Live
-            sensor values are shown with their quality status.{" "}
-            {checkIn.symptoms.length
-              ? `Reported symptoms: ${checkIn.symptoms.join(", ")}.`
-              : "No symptoms reported."}
-          </p>
-          <span className="simulated-note">
-            Simulated readings and sample data. Prototype. Not a medical device.
-          </span>
-        </article>
-      </div>
-      </section>
-    </>
+        )}
+      </article>
+
+      <article className="report-card">
+        <h2>
+          <span className="report-number">03</span> Measurements
+        </h2>
+        {handoff.observations.length === 0 ? (
+          <p>No measurements in the last 72 hours.</p>
+        ) : (
+          <table className="report-table">
+            <thead>
+              <tr>
+                <th scope="col">Reading</th>
+                <th scope="col">Value</th>
+                <th scope="col">Lane</th>
+                <th scope="col">Measured (UTC)</th>
+                <th scope="col">Quality</th>
+              </tr>
+            </thead>
+            <tbody>
+              {handoff.observations.slice(0, 40).map((entry) => (
+                <tr key={entry.id}>
+                  <td>{metricMeta[entry.metric].label}</td>
+                  <td>{formatValue(entry.metric, entry.value)}</td>
+                  <td>
+                    <LaneBadge lane={entry.lane} />
+                  </td>
+                  <td>
+                    {new Date(entry.observedAt).toLocaleString("en-GB", {
+                      timeZone: "UTC",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </td>
+                  <td>
+                    <span className="report-quality">
+                      {entry.quality}
+                      <TrustRing observation={entry} size={16} />
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <p className="disclaimer-line">
+          Quality flags are shown, not hidden. Flagged values are excluded from comparisons.
+        </p>
+      </article>
+
+      <article className="report-card">
+        <h2>
+          <span className="report-number">04</span> Trends compared with this person
+        </h2>
+        {handoff.trends.length === 0 ? (
+          <p>Not enough comparable history to describe a trend.</p>
+        ) : (
+          <ul className="report-list">
+            {handoff.trends.map((trend) => (
+              <li key={trend.metric}>{trend.text}</li>
+            ))}
+          </ul>
+        )}
+        {handoff.unknowns.length > 0 && (
+          <>
+            <h3>Unknowns</h3>
+            <ul className="report-list">
+              {handoff.unknowns.map((unknown) => (
+                <li key={unknown}>{unknown}</li>
+              ))}
+            </ul>
+          </>
+        )}
+      </article>
+
+      <article className="report-card">
+        <h2>
+          <span className="report-number">05</span> Summary
+        </h2>
+        <ul className="report-list">
+          {summary.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+        {handoff.notes && <p className="report-note">Crew note: {handoff.notes}</p>}
+        <p className="disclaimer-line">
+          <ShieldCheck aria-hidden="true" /> Generated from the data above. Private answers{" "}
+          {includePrivate ? "are included" : "are excluded"}. Demo packet, not a medical record.
+        </p>
+      </article>
+
+      <p className="no-print">
+        <Link className="text-button" href={`/crew/${crewId}`}>
+          Edit source data on the daily page
+        </Link>
+      </p>
+    </section>
   );
 }
-
-function ReportLine({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="report-line">
-      <span>{label}</span>
-      <b>{value}</b>
-    </div>
-  );
-}
-
-export { ReportsPage };

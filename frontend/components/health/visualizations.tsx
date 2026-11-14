@@ -1,17 +1,24 @@
 "use client";
 
-import { bodyAreas, type BodyArea } from "./health-data";
+import { bodyAreas } from "@/lib/mission-config";
+import type { BodyArea, StatusState } from "@/lib/types";
 
 export { Particles } from "./particles";
+
+export type BodyMapMode = "status" | "coverage";
 
 function BodyMap({
   selected,
   labels,
   onSelect,
+  mode = "status",
+  statuses = {},
 }: {
   selected: BodyArea;
   labels: Partial<Record<BodyArea, string[]>>;
   onSelect: (area: BodyArea) => void;
+  mode?: BodyMapMode;
+  statuses?: Partial<Record<BodyArea, StatusState>>;
 }) {
   const points: Record<Exclude<BodyArea, "Radiation">, [number, number]> = {
     Head: [160, 48],
@@ -83,6 +90,13 @@ function BodyMap({
         const callout = callouts[area];
         const isSelected = selected === area;
         const values = labels[area] ?? ["Not entered yet"];
+        const status = statuses[area] ?? "insufficient_history";
+        const statusClass =
+          mode === "coverage"
+            ? status === "insufficient_history" || status === "logged"
+              ? "coverage-missing"
+              : "coverage-assessed"
+            : `hotspot-${status}`;
         const lineStartX = callout.side === "left" ? 82 : x + 8;
         const lineEndX = callout.side === "left" ? 92 : callout.x;
 
@@ -111,10 +125,16 @@ function BodyMap({
             </text>
             <g
               onClick={() => onSelect(area)}
-              className="body-hotspot"
+              className={`body-hotspot ${statusClass}`}
               role="button"
               tabIndex={0}
-              aria-label={`Select ${area}: ${values.join(", ")}`}
+              aria-label={`Select ${area}: ${values.join(", ")}. ${
+                mode === "coverage"
+                  ? status === "insufficient_history" || status === "logged"
+                    ? "Not assessed."
+                    : "Assessed."
+                  : `Status: ${status.replace(/_/g, " ")}.`
+              }`}
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
@@ -131,7 +151,7 @@ function BodyMap({
                 stroke={isSelected ? "var(--accent)" : "var(--muted)"}
                 strokeWidth={isSelected ? 3 : 1.5}
               />
-              <circle cx={x} cy={y} r="3" fill="var(--accent)" />
+              <circle cx={x} cy={y} r="3" className="hotspot-core" />
             </g>
           </g>
         );

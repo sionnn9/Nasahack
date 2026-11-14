@@ -1,0 +1,37 @@
+{
+  "id": "demo-unresponsive",
+  "label": "ILLUSTRATIVE — NOT CLINICALLY REVIEWED",
+  "title": "Crewmate is not responding",
+  "category": "emergency",
+  "triggers": ["emergency:unresponsive"],
+  "steps": [
+    {
+      "id": "u1",
+      "type": "action",
+      "text": "Shout for help. Alert the crew now.",
+      "timer_minutes": 1,
+      "next": { "default": "u2" }
+    },
+    {
+      "id": "u2",
+      "type": "question",
+      "text": "Are they breathing normally?",
+      "options": ["Yes", "No", "Unsure"],
+      "next": { "Yes": "u3", "No": "u4", "Unsure": "u4" }
+    },
+    {
+      "id": "u3",
+      "type": "action",
+      "text": "Keep their airway open and stay with them. Contact the medical officer.",
+      "timer_minutes": 5,
+      "next": { "default": "DONE" }
+    },
+    {
+      "id": "u4",
+      "type": "action",
+      "text": "Follow the crew medical officer's instructions. Start a timer and record times.",
+      "timer_minutes": 5,
+      "next": { "default": "DONE" }
+    }
+  ]
+}
