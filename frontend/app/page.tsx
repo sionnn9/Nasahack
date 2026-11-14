@@ -1,69 +1,242 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useEffect, useState } from "react";
+import { ChevronRight } from "lucide-react";
+import { DashboardPage } from "@/components/health/dashboard-page";
+import { EmergencyScreen } from "@/components/health/emergency-screen";
+import { FormDrawer } from "@/components/health/form-drawer";
+import { HomePage } from "@/components/health/home-page";
+import { ReportsPage } from "@/components/health/reports-page";
+import { Particles } from "@/components/health/visualizations";
+import type {
+  BodyArea,
+  CrewMember,
+  PageName,
+} from "@/components/health/health-data";
+
+function App() {
+  const [astronaut, setAstronaut] = useState<CrewMember | null>(null);
+  const [page, setPage] = useState<PageName>("home");
+  const [dark, setDark] = useState(true);
+  const [selected, setSelected] = useState<BodyArea>("Heart");
+  const [formOpen, setFormOpen] = useState(false);
+  const [offline, setOffline] = useState(false);
+  const [time, setTime] = useState(new Date());
+  const [mood, setMood] = useState("");
+  const [stress, setStress] = useState("2");
+  const [symptoms, setSymptoms] = useState<string[]>([]);
+  const [saved, setSaved] = useState(false);
+  const [who, setWho] = useState("");
+  const [story, setStory] = useState("");
+  const [step, setStep] = useState(0);
+  const [checking, setChecking] = useState(false);
+
+  useEffect(() => {
+    try {
+      const pref = localStorage.getItem("crewsignal-theme");
+      if (pref) {
+        setDark(pref === "dark");
+      } else {
+        setDark(window.matchMedia("(prefers-color-scheme: dark)").matches);
+      }
+
+      const stored = localStorage.getItem("crewsignal-form");
+      if (stored) {
+        const data = JSON.parse(stored);
+        setMood(data.mood || "");
+        setStress(data.stress || "2");
+        setSymptoms(data.symptoms || []);
+      }
+    } catch {
+      // Ignore stored preference issues in preview mode.
+    }
+
+    const timer = setInterval(() => setTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const changeTheme = () => {
+    setDark((current) => {
+      const next = !current;
+      try {
+        localStorage.setItem("crewsignal-theme", next ? "dark" : "light");
+      } catch {
+        // Ignore localStorage failures in restricted environments.
+      }
+      return next;
+    });
+  };
+
+  const saveForm = () => {
+    try {
+      localStorage.setItem(
+        "crewsignal-form",
+        JSON.stringify({
+          mood,
+          stress,
+          symptoms,
+          savedAt: new Date().toISOString(),
+        }),
+      );
+    } catch {
+      // Ignore localStorage failures in restricted environments.
+    }
+
+    setSaved(true);
+    window.setTimeout(() => setSaved(false), 2400);
+    setFormOpen(false);
+  };
+
+  const openPerson = (person: CrewMember) => {
+    setAstronaut(person);
+    setPage("daily");
+  };
+
+  const beginSensorCheck = () => {
+    setChecking(true);
+    window.setTimeout(() => setChecking(false), 10000);
+  };
+
+  const sendEmergency = () => {
+    setPage("emergency");
+    setStep(0);
+  };
+
+  const back = () => {
+    if (page === "emergency") {
+      setPage(astronaut ? "daily" : "home");
+      return;
+    }
+
+    if (page === "reports") {
+      setPage("daily");
+      return;
+    }
+
+    setPage("home");
+    setAstronaut(null);
+  };
+
+  const handleWhoSelect = (nextWho: string) => {
+    setWho(nextWho);
+  };
+
+  const handleContinue = () => {
+    setStep((current) => current + 1);
+  };
+
+  const handleReportView = () => {
+    setPage("reports");
+  };
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <main
+      className={`app-shell ${dark ? "dark" : "light"} ${page === "emergency" ? "emergency-mode" : ""}`}
+    >
+      {page !== "emergency" && <Particles />}
+
+      {page === "home" && (
+        <HomePage
+          dark={dark}
+          time={time}
+          onToggleTheme={changeTheme}
+          onOpenPerson={openPerson}
+          onEmergency={sendEmergency}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
+      )}
+
+      {page === "emergency" && (
+        <EmergencyScreen
+          time={time}
+          who={who}
+          story={story}
+          step={step}
+          saveReport={() => {
+            setStep(4);
+            setSaved(true);
+          }}
+          onBack={back}
+          onWhoSelect={handleWhoSelect}
+          onStoryChange={setStory}
+          onContinue={handleContinue}
+          onReportView={handleReportView}
+        />
+      )}
+
+      {page !== "home" && page !== "emergency" && (
+        <>
+          {page === "daily" && (
+            <DashboardPage
+              astronaut={astronaut}
+              page={page}
+              dark={dark}
+              time={time}
+              checking={checking}
+              selected={selected}
+              mood={mood}
+              onThemeToggle={changeTheme}
+              onSendEmergency={sendEmergency}
+              onBack={back}
+              onOpenForm={() => setFormOpen(true)}
+              onBeginSensorCheck={beginSensorCheck}
+              onSelectArea={(area) => setSelected(area)}
+              onSetPage={setPage}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+          )}
+
+          {page === "reports" && (
+            <ReportsPage
+              astronaut={astronaut}
+              mood={mood}
+              stress={stress}
+              symptoms={symptoms}
+              time={time}
+              offline={offline}
+              onEdit={() => setFormOpen(true)}
+              onToggleOffline={setOffline}
+              onSend={() => setSaved(true)}
+            />
+          )}
+        </>
+      )}
+
+      {formOpen && (
+        <FormDrawer
+          mood={mood}
+          stress={stress}
+          symptoms={symptoms}
+          onClose={() => setFormOpen(false)}
+          onMoodSelect={setMood}
+          onStressSelect={setStress}
+          onSymptomsUpdate={setSymptoms}
+          onSave={saveForm}
+        />
+      )}
+
+      {saved && page === "emergency" && (
+        <div className="situation-box">
+          <strong>
+            Situation report ·{" "}
+            {time.toLocaleTimeString("en-GB", {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </strong>
+          <p>
+            {who || "Crew member"}: {story || "Emergency support requested."}
+          </p>
+          <button
+            className="text-button"
+            onClick={() => {
+              setPage("reports");
+            }}
           >
-            Documentation
-          </a>
+            Add to Reports <ChevronRight />
+          </button>
         </div>
-      </main>
-    </div>
+      )}
+    </main>
   );
 }
+
+export default App;
