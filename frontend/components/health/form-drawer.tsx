@@ -335,14 +335,8 @@ export function FormDrawer({
             <label className="checkbox-row">
               <input
                 type="checkbox"
-                checked={symptoms.some((symptom) => symptom.name === "None of these")}
-                onChange={() => {
-                  setSymptoms((current) =>
-                    current.some((symptom) => symptom.name === "None of these")
-                      ? []
-                      : [],
-                  );
-                }}
+                checked={symptoms.length === 0}
+                onChange={() => setSymptoms([])}
               />
               None of these
             </label>

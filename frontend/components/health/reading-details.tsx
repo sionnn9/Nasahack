@@ -21,12 +21,14 @@ export function ReadingDetails({
   area,
   observations,
   liveToday,
+  sensorUnplugged,
   onOpenGuide,
 }: {
   crewId: string;
   area: BodyArea;
   observations: Observation[];
   liveToday: Partial<Record<Metric, ChartPoint[]>>;
+  sensorUnplugged: boolean;
   onOpenGuide: (key: string) => void;
 }) {
   const privateUnlocked = useStore((state) => state.privateUnlocked);
@@ -86,6 +88,7 @@ export function ReadingDetails({
             crewId={crewId}
             observations={observations}
             liveToday={liveToday}
+            sensorUnplugged={sensorUnplugged}
             locked={
               !!readingFor(metric)?.private && !privateUnlocked
             }
@@ -103,6 +106,7 @@ function MetricDetail({
   observations,
   liveToday,
   locked,
+  sensorUnplugged,
   onOpenGuide,
 }: {
   metric: Metric;
@@ -110,21 +114,39 @@ function MetricDetail({
   observations: Observation[];
   liveToday: Partial<Record<Metric, ChartPoint[]>>;
   locked: boolean;
+  sensorUnplugged: boolean;
   onOpenGuide: (key: string) => void;
 }) {
   const meta = metricMeta[metric];
-  const newest = latest(
+  const rawNewest = latest(
     observations.filter((entry) => entry.crewId === crewId),
     metric,
   );
-  const comparison = statusFor(observations, crewId, metric);
+  // A sensor that has stopped reporting cannot leave a reassuring status on
+  // screen: the value becomes "No valid reading" with a plain reason.
+  const liveMetric = ["heart_rate", "skin_temp", "bp_systolic", "bp_diastolic", "motion"].includes(metric);
+  const unplugged = sensorUnplugged && liveMetric;
+  const newest = unplugged && rawNewest ? { ...rawNewest, quality: "no_contact" as const, qualityReason: "The sensor is not reporting. This is not a current measurement." } : rawNewest;
+  const comparison = unplugged
+    ? {
+        state: "no_valid_reading" as const,
+        label: "No valid reading",
+        detail: "The sensor is not reporting. Check the contact and try again.",
+        comparableCount: 0,
+        range: null,
+      }
+    : statusFor(observations, crewId, metric);
   const reading = readingFor(metric);
   const livePoints = liveToday[metric] ?? [];
   const trendPoints = dailyTrend(
     observations.filter((entry) => entry.crewId === crewId),
     metric,
   );
-  const [showGuide, setShowGuide] = useState(false);
+  const [laneFilter, setLaneFilter] = useState<Observation["lane"] | "all">("all");
+  const lanes = new Set(trendPoints.map((point) => point.lane));
+  // Lanes are never merged: "all" still shows one lane at a time, the newest.
+  const activeLane = laneFilter === "all" ? trendPoints[trendPoints.length - 1]?.lane : laneFilter;
+  const filteredTrend = trendPoints.filter((point) => point.lane === activeLane);
 
   if (locked) {
     return (
@@ -171,9 +193,26 @@ function MetricDetail({
           />
         </div>
         <div>
-          <h4>14-day trend (daily)</h4>
+          <div className="chart-head">
+            <h4>14-day trend (daily)</h4>
+            <div className="lane-filter" role="group" aria-label="Data lane">
+              {(["all", "live", "manual", "replay", "synthetic"] as const)
+                .filter((lane) => lane === "all" || lanes.has(lane))
+                .map((lane) => (
+                  <button
+                    key={lane}
+                    type="button"
+                    className={laneFilter === lane ? "active" : ""}
+                    aria-pressed={laneFilter === lane}
+                    onClick={() => setLaneFilter(lane)}
+                  >
+                    {lane === "all" ? "Newest lane" : lane}
+                  </button>
+                ))}
+            </div>
+          </div>
           <MetricChart
-            points={trendPoints}
+            points={filteredTrend}
             metric={metric}
             band={comparison.range}
             label={`${meta.label} 14 day trend`}
@@ -191,10 +230,7 @@ function MetricDetail({
         <button
           type="button"
           className="text-button"
-          onClick={() => {
-            setShowGuide((value) => !value);
-            onOpenGuide(reading?.key ?? "");
-          }}
+          onClick={() => onOpenGuide(reading?.key ?? "")}
         >
           <Info aria-hidden="true" /> Measurement guide
         </button>
@@ -206,7 +242,6 @@ function MetricDetail({
           prompt to check, not a diagnosis.
         </p>
       )}
-      {showGuide && null}
     </div>
   );
 }

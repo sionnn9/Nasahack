@@ -2,13 +2,17 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ChevronLeft, Moon, ShieldAlert, Sun } from "lucide-react";
+import { ChevronLeft, Moon, ShieldAlert, Sun, Text, Waves } from "lucide-react";
 import { useStore } from "@/lib/store";
 
 export function CrewNav({ crewId }: { crewId?: string }) {
   const pathname = usePathname();
   const theme = useStore((state) => state.theme);
   const toggleTheme = useStore((state) => state.toggleTheme);
+  const largeText = useStore((state) => state.largeText);
+  const setLargeText = useStore((state) => state.setLargeText);
+  const nightWatch = useStore((state) => state.nightWatch);
+  const setNightWatch = useStore((state) => state.setNightWatch);
 
   const tabs = crewId
     ? [
@@ -39,6 +43,24 @@ export function CrewNav({ crewId }: { crewId?: string }) {
         ))}
       </div>
       <div className="nav-actions">
+        <button
+          className="icon-button"
+          aria-pressed={largeText}
+          onClick={() => setLargeText(!largeText)}
+          aria-label="Large text mode"
+          title="Large text mode"
+        >
+          <Text />
+        </button>
+        <button
+          className="icon-button"
+          aria-pressed={nightWatch}
+          onClick={() => setNightWatch(!nightWatch)}
+          aria-label="Night Watch red-shift theme"
+          title="Night Watch red-shift theme"
+        >
+          <Waves />
+        </button>
         <button
           className="icon-button"
           onClick={toggleTheme}

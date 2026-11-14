@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -27,6 +27,8 @@ import { readings, readingFor } from "@/lib/readings";
 import { buildConcerns } from "@/lib/concerns/build";
 import { checkInStreak, tasksFor } from "@/lib/tasks";
 import { makeObservation, observationsFromCheckIn, statusByArea } from "@/lib/observations/derived";
+import { parseBedRestCsv, replayObservations } from "@/lib/replay/csv";
+import { SimulatedAdapter, WebSerialAdapter } from "@/lib/sensors/adapter";
 import { useStore } from "@/lib/store";
 import { pathwayForSymptoms } from "@/lib/pathways";
 import type { BodyArea, Metric, Observation } from "@/lib/types";
@@ -55,6 +57,14 @@ export function DashboardPage({ crewId }: { crewId: string }) {
   const [guideKey, setGuideKey] = useState<string | null>(null);
   const [scenarioOpen, setScenarioOpen] = useState(false);
   const [isDemo, setIsDemo] = useState(false);
+  const [replayNote, setReplayNote] = useState("");
+  const [reminderNote, setReminderNote] = useState("");
+  // The vitals object changes every second; keep it in a ref so the 30 s
+  // persistence timer is not torn down before it can fire.
+  const vitalsRef = useRef(simulation.vitals);
+  vitalsRef.current = simulation.vitals;
+  const qualityRef = useRef(simulation.quality);
+  qualityRef.current = simulation.quality;
 
   useEffect(() => {
     setIsDemo(new URLSearchParams(window.location.search).get("demo") === "1");
@@ -63,13 +73,13 @@ export function DashboardPage({ crewId }: { crewId: string }) {
   useEffect(() => {
     if (!member) return;
     const timer = window.setInterval(() => {
-      const stamp = new Date();
-      const nowIso = stamp.toISOString();
+      if (qualityRef.current !== "Usable") return;
+      const nowIso = new Date().toISOString();
       const rows: Observation[] = [
         makeObservation({
           crewId,
           metric: "heart_rate",
-          value: simulation.vitals.heartRate,
+          value: vitalsRef.current.heartRate,
           observedAt: nowIso,
           lane: "live",
           method: "ppg_wrist",
@@ -78,7 +88,7 @@ export function DashboardPage({ crewId }: { crewId: string }) {
         makeObservation({
           crewId,
           metric: "skin_temp",
-          value: simulation.vitals.skinTemperature,
+          value: vitalsRef.current.skinTemperature,
           observedAt: nowIso,
           lane: "live",
           method: "thermometer_skin",
@@ -88,7 +98,7 @@ export function DashboardPage({ crewId }: { crewId: string }) {
       void addObservations(rows);
     }, 30_000);
     return () => window.clearInterval(timer);
-  }, [addObservations, crewId, member, simulation.vitals]);
+  }, [addObservations, crewId, member]);
 
   const liveToday = useMemo<Partial<Record<Metric, ChartPoint[]>>>(() => {
     const stamp = (index: number) =>
@@ -410,6 +420,7 @@ export function DashboardPage({ crewId }: { crewId: string }) {
           area={area}
           observations={observations}
           liveToday={liveToday}
+          sensorUnplugged={simulation.quality !== "Usable"}
           onOpenGuide={(key) => key && setGuideKey(key)}
         />
       </div>
@@ -445,6 +456,90 @@ export function DashboardPage({ crewId }: { crewId: string }) {
       <HazardStrip
         highlight={concerns.flatMap((concern) => concern.hazards)}
       />
+
+      <section className="scenario-panel" aria-label="Data tools">
+        <div className="section-head">
+          <h2>Data tools</h2>
+          <span className="lane-hint">Ground replay is never mixed with live data.</span>
+        </div>
+        <div className="scenario-actions">
+          <label className="replay-upload">
+            Import bed-rest CSV (replay lane)
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              onChange={async (event) => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                const text = await file.text();
+                const { rows } = parseBedRestCsv(text);
+                if (rows.length === 0) {
+                  setReplayNote("No rows recognised. Expected Subject, Day, Phase and a sleep or heart-rate column.");
+                  return;
+                }
+                const observations = replayObservations(rows, crewId);
+                await addObservations(observations);
+                const participants = new Set(rows.map((row) => row.participant)).size;
+                setReplayNote(
+                  `Imported ${observations.length} replay observations from ${participants} participants. Ground analog from three participants.`,
+                );
+              }}
+            />
+          </label>
+          <a className="text-button" href="/sample-bed-rest.csv" download>
+            Sample CSV
+          </a>
+          <button
+            type="button"
+            onClick={() => {
+              const simulated = new SimulatedAdapter();
+              void simulated.connect();
+              notify("Simulated sensor adapter connected. Lanes stay separate.", "ok");
+            }}
+          >
+            Connect simulated sensor
+          </button>
+          <button
+            type="button"
+            onClick={async () => {
+              const serial = new WebSerialAdapter();
+              try {
+                await serial.connect();
+              } catch (error) {
+                notify(
+                  error instanceof Error ? error.message : "Web Serial is unavailable.",
+                  "attention",
+                );
+              }
+            }}
+          >
+            Web Serial pulse sensor (stub)
+          </button>
+          <button
+            type="button"
+            onClick={async () => {
+              if (typeof Notification === "undefined") {
+                setReminderNote("This browser has no notification support. In-app reminder only.");
+                return;
+              }
+              const permission = await Notification.requestPermission();
+              if (permission !== "granted") {
+                setReminderNote("Notifications are blocked. Reminders stay in the app.");
+                return;
+              }
+              const overdue = tasks.find((task) => task.state === "overdue") ?? tasks[0];
+              new Notification("CrewSignal reminder", {
+                body: `${overdue.label}: ${overdue.detail}`,
+              });
+              setReminderNote(`Reminder sent for ${overdue.label}.`);
+            }}
+          >
+            Remind me about tasks
+          </button>
+          {replayNote && <p>{replayNote}</p>}
+          {reminderNote && <p>{reminderNote}</p>}
+        </div>
+      </section>
 
       {isDemo && (
         <section className="scenario-panel" aria-label="Scenario panel">
