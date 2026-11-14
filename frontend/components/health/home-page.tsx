@@ -16,19 +16,22 @@ function HomePage({
   onOpenPerson: (person: CrewMember) => void;
   onEmergency: () => void;
 }) {
+  const earthTime =
+    time.getTime() === 0
+      ? "--:--:--"
+      : time.toLocaleTimeString("en-GB", {
+          timeZone: "UTC",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        });
+
   return (
     <section className="home-page">
       <div className="home-top">
         <div className="earth-time">
           <span className="live-dot" /> EARTH · UTC{" "}
-          <b>
-            {time.toLocaleTimeString("en-GB", {
-              timeZone: "UTC",
-              hour: "2-digit",
-              minute: "2-digit",
-              second: "2-digit",
-            })}
-          </b>
+          <b>{earthTime}</b>
         </div>
         <button
           className="icon-button theme-button"

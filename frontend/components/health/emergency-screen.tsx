@@ -117,7 +117,7 @@ function EmergencyScreen({
                 <div className="helper-label">CREWSIGNAL HELPER</div>
                 <p>
                   {step === 1
-                    ? "Are they breathing normally? If you are unsure, alert the crew now."
+                    ? "Is their breathing as usual? If you are unsure, alert the crew now."
                     : step === 2
                       ? "Thank you. Stay with them and keep them comfortable."
                       : "Alert the crew and contact the medical officer or Earth now."}

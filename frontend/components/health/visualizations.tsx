@@ -42,26 +42,42 @@ function Particles() {
 
 function BodyMap({
   selected,
+  labels,
   onSelect,
 }: {
-  selected: string;
+  selected: BodyArea;
+  labels: Partial<Record<BodyArea, string[]>>;
   onSelect: (area: BodyArea) => void;
 }) {
-  const points: Record<BodyArea, [number, number]> = {
+  const points: Record<Exclude<BodyArea, "Radiation">, [number, number]> = {
     Head: [160, 48],
     Heart: [170, 123],
-    Skin: [148, 112],
     Arm: [94, 151],
+    Skin: [148, 112],
     Abdomen: [160, 178],
     Legs: [163, 279],
   };
+  const callouts: Record<
+    Exclude<BodyArea, "Radiation">,
+    { x: number; y: number; textX: number; textY: number; side: "left" | "right" }
+  > = {
+    Head: { x: 235, y: 42, textX: 243, textY: 38, side: "right" },
+    Heart: { x: 235, y: 123, textX: 243, textY: 127, side: "right" },
+    Arm: { x: 12, y: 151, textX: 4, textY: 147, side: "left" },
+    Skin: { x: 235, y: 100, textX: 243, textY: 103, side: "right" },
+    Abdomen: { x: 235, y: 184, textX: 243, textY: 188, side: "right" },
+    Legs: { x: 235, y: 279, textX: 243, textY: 283, side: "right" },
+  };
+  const physicalAreas = bodyAreas.filter(
+    (area): area is Exclude<BodyArea, "Radiation"> => area !== "Radiation",
+  );
 
   return (
     <svg
       className="body-svg"
-      viewBox="0 0 320 350"
+      viewBox="0 0 440 350"
       role="img"
-      aria-label="Illustration of a body. Choose a body area to see its readings"
+      aria-label="Body map. Select a body area to see its readings."
     >
       <ellipse cx="160" cy="326" rx="72" ry="12" fill="var(--shadow)" />
       <g stroke="var(--body-line)" strokeWidth="2" strokeLinejoin="round">
@@ -92,34 +108,61 @@ function BodyMap({
         <path d="M138 220 L182 220" fill="none" stroke="#a7cfc2" />
       </g>
 
-      {bodyAreas.map((area) => {
+      {physicalAreas.map((area) => {
         const [x, y] = points[area];
+        const callout = callouts[area];
         const isSelected = selected === area;
+        const values = labels[area] ?? ["Not entered yet"];
+        const lineStartX = callout.side === "left" ? 82 : x + 8;
+        const lineEndX = callout.side === "left" ? 92 : callout.x;
 
         return (
-          <g
-            key={area}
-            onClick={() => onSelect(area)}
-            className="body-hotspot"
-            role="button"
-            tabIndex={0}
-            aria-label={`Select ${area}`}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                onSelect(area);
-              }
-            }}
-          >
-            <circle
-              cx={x}
-              cy={y}
-              r={isSelected ? 17 : 11}
-              fill={isSelected ? "var(--accent)" : "var(--surface)"}
-              fillOpacity={isSelected ? 0.25 : 0.85}
-              stroke={isSelected ? "var(--accent)" : "var(--muted)"}
-              strokeWidth={isSelected ? 3 : 1.5}
+          <g key={area}>
+            <line
+              x1={lineStartX}
+              y1={y}
+              x2={lineEndX}
+              y2={callout.y}
+              stroke="var(--muted)"
+              strokeWidth="0.8"
             />
-            <circle cx={x} cy={y} r="3" fill="var(--accent)" />
+            <text
+              x={callout.textX}
+              y={callout.textY}
+              className="body-reading-label"
+              textAnchor={callout.side === "left" ? "start" : "start"}
+            >
+              <tspan>{values[0]}</tspan>
+              {values.slice(1, 2).map((value) => (
+                <tspan key={value} x={callout.textX} dy="13">
+                  {value}
+                </tspan>
+              ))}
+            </text>
+            <g
+              onClick={() => onSelect(area)}
+              className="body-hotspot"
+              role="button"
+              tabIndex={0}
+              aria-label={`Select ${area}: ${values.join(", ")}`}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onSelect(area);
+                }
+              }}
+            >
+              <circle
+                cx={x}
+                cy={y}
+                r={isSelected ? 17 : 11}
+                fill={isSelected ? "var(--accent)" : "var(--surface)"}
+                fillOpacity={isSelected ? 0.25 : 0.85}
+                stroke={isSelected ? "var(--accent)" : "var(--muted)"}
+                strokeWidth={isSelected ? 3 : 1.5}
+              />
+              <circle cx={x} cy={y} r="3" fill="var(--accent)" />
+            </g>
           </g>
         );
       })}
@@ -128,24 +171,49 @@ function BodyMap({
 }
 
 function LineChart({
+  values,
   color = "var(--accent)",
   tall = false,
+  label = "Simulated readings over time",
 }: {
+  values: Array<number | null>;
   color?: string;
   tall?: boolean;
+  label?: string;
 }) {
-  const yValues = [25, 60, 95, 130];
-  const xValues = [0, 68, 131, 198, 270, 332, 394, 459, 526, 600];
-  const yCoords = [95, 80, 69, 64, 67, 57, 50, 42, 48, 43];
+  const validValues = values.filter((value): value is number => value !== null);
+  const min = validValues.length ? Math.min(...validValues) : 0;
+  const max = validValues.length ? Math.max(...validValues) : 1;
+  const spread = Math.max(max - min, 1);
+  const points = values.map((value, index) =>
+    value === null
+      ? null
+      : {
+          x: values.length < 2 ? 300 : (index / (values.length - 1)) * 600,
+          y: 120 - ((value - min) / spread) * 90,
+        },
+  );
+  const segments: string[] = [];
+  let segment = "";
+  points.forEach((point) => {
+    if (!point) {
+      if (segment) segments.push(segment);
+      segment = "";
+      return;
+    }
+
+    segment += `${segment ? " L" : "M"}${point.x},${point.y}`;
+  });
+  if (segment) segments.push(segment);
 
   return (
     <svg
       className={`line-chart ${tall ? "chart-tall" : ""}`}
       viewBox="0 0 600 140"
       role="img"
-      aria-label="Simulated readings over time"
+      aria-label={label}
     >
-      {yValues.map((y) => (
+      {[25, 60, 95, 130].map((y) => (
         <line
           key={y}
           x1="0"
@@ -156,24 +224,18 @@ function LineChart({
           strokeDasharray="3 6"
         />
       ))}
-      <path
-        d="M0 95 C28 86 38 72 68 80 S103 91 131 69 S166 78 198 64 S242 82 270 67 S306 46 332 57 S366 72 394 50 S430 62 459 42 S496 68 526 48 S565 34 600 43"
-        fill="none"
-        stroke={color}
-        strokeWidth="3"
-        strokeLinecap="round"
-      />
-      {xValues.map((x, index) => (
-        <circle
-          key={`${x}-${index}`}
-          cx={x}
-          cy={yCoords[index]}
-          r="3.5"
-          fill={color}
+      {segments.map((path, index) => (
+        <path
+          key={index}
+          d={path}
+          fill="none"
+          stroke={color}
+          strokeWidth="3"
+          strokeLinecap="round"
         />
       ))}
     </svg>
   );
 }
 
-export { Particles, BodyMap, LineChart };
+export { BodyMap, LineChart, Particles };
