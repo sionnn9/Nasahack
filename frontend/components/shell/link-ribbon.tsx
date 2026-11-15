@@ -23,6 +23,9 @@ export function LinkRibbon() {
   const link = useStore((state) => state.link);
   const setEnvironment = useStore((state) => state.setEnvironment);
   const setLink = useStore((state) => state.setLink);
+  const serverConfigured = useStore((state) => state.serverConfigured);
+  const serverReachable = useStore((state) => state.serverReachable);
+  const serverDelayScale = useStore((state) => state.serverDelayScale);
   const [online, setOnline] = useState(true);
 
   useEffect(() => {
@@ -64,7 +67,27 @@ export function LinkRibbon() {
           {effectiveLink === "blackout"
             ? "Packets stay queued on board."
             : `A reply from Earth would take about ${formatDelay(preset.delaySeconds)}.`}
+          {serverConfigured && serverDelayScale !== 1 && (
+            <>
+              {" "}
+              <span className="ribbon-compression">
+                scenario delay {formatDelay(preset.delaySeconds)} · demo compressed ×
+                {Math.round(1 / serverDelayScale)}
+              </span>
+            </>
+          )}
         </span>
+        {serverConfigured && (
+          <span
+            className={`ribbon-server ${
+              serverReachable === null ? "checking" : serverReachable ? "up" : "down"
+            }`}
+            title="The simulated link state is separate from the ground server."
+          >
+            Ground server:{" "}
+            {serverReachable === null ? "checking" : serverReachable ? "reachable" : "unreachable"}
+          </span>
+        )}
         {!online && (
           <span className="ribbon-offline">
             <WifiOff aria-hidden="true" /> Device offline

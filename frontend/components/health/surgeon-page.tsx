@@ -1,21 +1,84 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { CheckCheck, Monitor } from "lucide-react";
 import { useStore } from "@/lib/store";
 import type { Handoff, OutboxItem } from "@/lib/types";
+import {
+  acknowledgeOnServer,
+  connectStream,
+  fetchSurgeonInbox,
+  packetToOutbox,
+  type ServerPacket,
+} from "@/lib/outbox/http-transport";
 
 function isHandoff(payload: OutboxItem["payload"]): payload is Handoff {
   return typeof payload === "object" && payload !== null && "observations" in payload;
 }
 
-/** Mock ground console. Same browser, separate route, styled as a ground station. */
+/** Ground console. Reads the real inbox when a backend is configured. */
 export function SurgeonPage() {
   const outbox = useStore((state) => state.outbox);
   const acknowledge = useStore((state) => state.acknowledge);
-  const received = outbox
+  const serverConfigured = useStore((state) => state.serverConfigured);
+  const serverReachable = useStore((state) => state.serverReachable);
+  const setServerStatus = useStore((state) => state.setServerStatus);
+
+  const [serverPackets, setServerPackets] = useState<ServerPacket[] | null>(null);
+  const [streamNote, setStreamNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!serverConfigured) return;
+    let cancelled = false;
+    const load = async () => {
+      const result = await fetchSurgeonInbox();
+      if (cancelled) return;
+      if (result.ok) {
+        setServerPackets(result.packets);
+        setStreamNote(null);
+        setServerStatus(true);
+      } else {
+        setStreamNote(result.message);
+        if (result.status === 0) setServerStatus(false);
+      }
+    };
+    void load();
+    const stop = connectStream({
+      onDelivered: () => void load(),
+      onAcknowledged: () => void load(),
+      onError: () => setStreamNote("Stream disconnected. Reconnecting and polling."),
+    });
+    const timer = window.setInterval(() => void load(), 5000);
+    return () => {
+      cancelled = true;
+      stop();
+      window.clearInterval(timer);
+    };
+  }, [serverConfigured, setServerStatus]);
+
+  const localReceived = outbox
     .filter((item) => item.state !== "queued")
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  const rows = (
+    serverConfigured ? (serverPackets ?? []).map(packetToOutbox) : localReceived
+  ).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+
+  const handleAcknowledge = async (item: OutboxItem) => {
+    if (!serverConfigured) {
+      await acknowledge(item.id);
+      return;
+    }
+    const result = await acknowledgeOnServer(item.id);
+    if (!result.ok) {
+      setStreamNote(result.message);
+      if (result.status === 0) setServerStatus(false);
+      return;
+    }
+    setServerPackets((current) =>
+      (current ?? []).map((packet) => (packet.id === item.id ? result.packet : packet)),
+    );
+  };
 
   return (
     <section className="surgeon-page">
@@ -35,14 +98,21 @@ export function SurgeonPage() {
         </Link>
       </header>
 
-      {received.length === 0 ? (
+      {serverConfigured && (
+        <p className={`surgeon-server ${serverReachable ? "up" : "down"}`}>
+          Ground server: {serverReachable ? "reachable" : "unreachable"}
+          {streamNote ? ` · ${streamNote}` : ""}
+        </p>
+      )}
+
+      {rows.length === 0 ? (
         <div className="empty-state">
           <h2>No packets received</h2>
           <p>Queue a handoff or wait for the delay to elapse.</p>
         </div>
       ) : (
         <ul className="surgeon-list">
-          {received.map((item) => {
+          {rows.map((item) => {
             const handoff = isHandoff(item.payload) ? item.payload : null;
             return (
               <li key={item.id} className="surgeon-card">
@@ -65,7 +135,7 @@ export function SurgeonPage() {
                     <button
                       type="button"
                       className="primary-button"
-                      onClick={() => void acknowledge(item.id)}
+                      onClick={() => void handleAcknowledge(item)}
                     >
                       <CheckCheck aria-hidden="true" /> Acknowledge
                     </button>

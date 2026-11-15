@@ -29,6 +29,7 @@ import { checkInStreak, tasksFor } from "@/lib/tasks";
 import { makeObservation, observationsFromCheckIn, statusByArea } from "@/lib/observations/derived";
 import { parseBedRestCsv, replayObservations } from "@/lib/replay/csv";
 import { SimulatedAdapter, WebSerialAdapter } from "@/lib/sensors/adapter";
+import { RemoteSensorAdapter, apiConfigured } from "@/lib/outbox/http-transport";
 import { useStore } from "@/lib/store";
 import { pathwayForSymptoms } from "@/lib/pathways";
 import type { BodyArea, Metric, Observation } from "@/lib/types";
@@ -65,6 +66,15 @@ export function DashboardPage({ crewId }: { crewId: string }) {
   vitalsRef.current = simulation.vitals;
   const qualityRef = useRef(simulation.quality);
   qualityRef.current = simulation.quality;
+  const remoteAdapter = useRef<RemoteSensorAdapter | null>(null);
+
+  useEffect(
+    () => () => {
+      remoteAdapter.current?.disconnect();
+      remoteAdapter.current = null;
+    },
+    [],
+  );
 
   useEffect(() => {
     setIsDemo(new URLSearchParams(window.location.search).get("demo") === "1");
@@ -499,6 +509,37 @@ export function DashboardPage({ crewId }: { crewId: string }) {
           >
             Connect simulated sensor
           </button>
+          {apiConfigured && (
+            <button
+              type="button"
+              onClick={async () => {
+                remoteAdapter.current?.disconnect();
+                const adapter = new RemoteSensorAdapter();
+                remoteAdapter.current = adapter;
+                try {
+                  await adapter.connect();
+                  adapter.onSample((sample) => {
+                    void addObservations([sample]);
+                  });
+                  adapter.onQuality((quality) => {
+                    setReplayNote(
+                      quality === "ok"
+                        ? "Remote sensor is reporting usable samples."
+                        : "Remote sensor lost contact. Values stop entering comparisons.",
+                    );
+                  });
+                  notify("Remote sensor connected to the ground stream.", "ok");
+                } catch (error) {
+                  notify(
+                    error instanceof Error ? error.message : "Remote sensor failed.",
+                    "attention",
+                  );
+                }
+              }}
+            >
+              Connect remote sensor (SSE)
+            </button>
+          )}
           <button
             type="button"
             onClick={async () => {

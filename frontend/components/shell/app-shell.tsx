@@ -6,6 +6,11 @@ import { Particles } from "@/components/health/particles";
 import { LinkRibbon } from "@/components/shell/link-ribbon";
 import { EmergencyBar } from "@/components/shell/emergency-bar";
 import { useStore } from "@/lib/store";
+import {
+  apiConfigured,
+  connectStream,
+  pingServer,
+} from "@/lib/outbox/http-transport";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const theme = useStore((state) => state.theme);
@@ -17,6 +22,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const advanceOutbox = useStore((state) => state.advanceOutbox);
   const refreshOutbox = useStore((state) => state.refreshOutbox);
   const clearToast = useStore((state) => state.clearToast);
+  const setServerStatus = useStore((state) => state.setServerStatus);
+  const applyServerPacket = useStore((state) => state.applyServerPacket);
   const pathname = usePathname();
   const emergencyMode = pathname.startsWith("/emergency");
 
@@ -30,6 +37,30 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }, 2000);
     return () => window.clearInterval(timer);
   }, [advanceOutbox]);
+
+  // Ground-server reachability and events are separate from the simulated link.
+  useEffect(() => {
+    if (!apiConfigured) return;
+    let cancelled = false;
+    const check = async () => {
+      const result = await pingServer();
+      if (cancelled) return;
+      if (result.ok) setServerStatus(true, result.link.delayScale);
+      else setServerStatus(false);
+    };
+    void check();
+    const timer = window.setInterval(() => void check(), 15_000);
+    const stopStream = connectStream({
+      onDelivered: (packet) => void applyServerPacket(packet),
+      onAcknowledged: (packet) => void applyServerPacket(packet),
+      onError: () => setServerStatus(false),
+    });
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      stopStream();
+    };
+  }, [applyServerPacket, setServerStatus]);
 
   useEffect(() => {
     if (!toast) return;

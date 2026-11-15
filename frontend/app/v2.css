@@ -143,6 +143,41 @@
   width: 13px;
   height: 13px;
 }
+.ribbon-server,
+.server-pill {
+  font-size: 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+.ribbon-server.up,
+.server-pill.up {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.ribbon-server.down,
+.server-pill.down {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.ribbon-server.checking {
+  color: var(--muted);
+}
+.ribbon-compression {
+  color: var(--attention);
+}
+.surgeon-server {
+  font-size: 11px;
+  margin: 0 0 12px;
+  color: var(--muted);
+}
+.surgeon-server.up {
+  color: var(--accent);
+}
+.surgeon-server.down {
+  color: var(--danger);
+}
 .ribbon-day {
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.08em;

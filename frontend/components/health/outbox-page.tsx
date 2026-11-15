@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import Link from "next/link";
 import { RefreshCw, Trash2 } from "lucide-react";
 import { CrewNav } from "@/components/health/crew-nav";
@@ -24,6 +24,20 @@ export function OutboxPage() {
   const advanceOutbox = useStore((state) => state.advanceOutbox);
   const cancelOutbox = useStore((state) => state.cancelOutbox);
   const notify = useStore((state) => state.notify);
+  const hydrated = useStore((state) => state.hydrated);
+  const serverConfigured = useStore((state) => state.serverConfigured);
+  const serverReachable = useStore((state) => state.serverReachable);
+  const reconcileOutbox = useStore((state) => state.reconcileOutbox);
+
+  const crewIds = useMemo(
+    () => [...new Set(outbox.map((item) => item.crewId))].join(","),
+    [outbox],
+  );
+
+  useEffect(() => {
+    if (!serverConfigured || !hydrated || !crewIds) return;
+    for (const crewId of crewIds.split(",")) void reconcileOutbox(crewId);
+  }, [crewIds, hydrated, reconcileOutbox, serverConfigured]);
 
   const preset = environmentFor(environment);
   const ordered = useMemo(
@@ -46,6 +60,11 @@ export function OutboxPage() {
         </div>
         <div className="reports-actions">
           <span className={`link-pill ${link}`}>{link}</span>
+          {serverConfigured && (
+            <span className={`server-pill ${serverReachable ? "up" : "down"}`}>
+              Ground server {serverReachable ? "reachable" : "unreachable"}
+            </span>
+          )}
           <button
             type="button"
             className="secondary-button"
@@ -57,11 +76,15 @@ export function OutboxPage() {
       </header>
 
       <p className="outbox-note">
-        {link === "blackout"
-          ? "Blackout: packets stay queued on board until the link returns."
-          : link === "live"
-            ? "Link is live. Queued packets move to Sent immediately."
-            : `Delayed link: queued packets move to Sent after the configured one-way delay of ${formatDelay(preset.delaySeconds)}.`}
+        {serverConfigured
+          ? serverReachable
+            ? "The ground server owns delivery states. Sent, delivered and acknowledged appear only when the server reports them."
+            : "Ground server unreachable. Packets stay queued; the same-device BroadcastChannel fallback only syncs this browser."
+          : link === "blackout"
+            ? "Blackout: packets stay queued on board until the link returns."
+            : link === "live"
+              ? "Link is live. Queued packets move to Sent immediately."
+              : `Delayed link: queued packets move to Sent after the configured one-way delay of ${formatDelay(preset.delaySeconds)}.`}
       </p>
 
       {ordered.length === 0 ? (
@@ -83,6 +106,7 @@ export function OutboxPage() {
                 void useStore.getState().acknowledge(item.id);
                 notify("Acknowledged locally. This is a demo receipt.", "ok");
               }}
+              allowLocalAck={!serverConfigured}
             />
           ))}
         </ul>
@@ -95,10 +119,12 @@ function OutboxRow({
   item,
   onCancel,
   onAcknowledge,
+  allowLocalAck,
 }: {
   item: OutboxItem;
   onCancel: () => void;
   onAcknowledge: () => void;
+  allowLocalAck: boolean;
 }) {
   const reached = stateOrder.indexOf(item.state);
   return (
@@ -156,7 +182,7 @@ function OutboxRow({
             <Trash2 aria-hidden="true" /> Cancel before send
           </button>
         )}
-        {item.state === "sent" && (
+        {item.state === "sent" && allowLocalAck && (
           <button type="button" className="secondary-button" onClick={onAcknowledge}>
             Mark acknowledged (demo)
           </button>

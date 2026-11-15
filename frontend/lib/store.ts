@@ -1,7 +1,16 @@
 "use client";
 
 import { create } from "zustand";
-import { repository, type Repository } from "@/lib/repo/repository";
+import { repository, syncedRepository } from "@/lib/repo/client";
+import type { Repository } from "@/lib/repo/repository";
+import {
+  apiConfigured,
+  fetchPackets,
+  packetToOutbox,
+  postPacket,
+  sendLink,
+  type ServerPacket,
+} from "@/lib/outbox/http-transport";
 import { environmentFor, missionConfig } from "@/lib/mission-config";
 import { hashPin } from "@/lib/privacy";
 import { seedObservations } from "@/lib/demo/seed";
@@ -32,6 +41,9 @@ type State = {
   toast: Toast | null;
   pinHash: string | null;
   privateUnlocked: boolean;
+  serverConfigured: boolean;
+  serverReachable: boolean | null;
+  serverDelayScale: number;
 };
 
 type Actions = {
@@ -55,9 +67,14 @@ type Actions = {
   lockPrivate: () => void;
   notify: (message: string, tone?: Toast["tone"]) => void;
   clearToast: () => void;
+  setServerStatus: (reachable: boolean, delayScale?: number) => void;
+  applyServerPacket: (packet: ServerPacket) => Promise<void>;
+  reconcileOutbox: (crewId: string) => Promise<void>;
 };
 
 const THEME_KEY = "crewsignal-theme";
+/** In-flight packet ids, so the 2 s tick cannot post the same packet twice. */
+const posting = new Set<string>();
 
 function readTheme(): "dark" | "light" {
   if (typeof localStorage === "undefined") return "dark";
@@ -99,6 +116,9 @@ export const useStore = create<State & Actions>((set, get) => ({
   toast: null,
   pinHash: null,
   privateUnlocked: false,
+  serverConfigured: apiConfigured,
+  serverReachable: apiConfigured ? null : false,
+  serverDelayScale: 1,
 
   hydrate: async (repo = repository) => {
     if (get().hydrated) return;
@@ -130,6 +150,25 @@ export const useStore = create<State & Actions>((set, get) => ({
         pinHash: pinHash ?? null,
         hydrated: true,
       });
+
+      if (syncedRepository) {
+        void syncedRepository
+          .pull()
+          .then(async (count) => {
+            if (count === 0) return;
+            const [nextObservations, nextCheckIns, nextEncounters] = await Promise.all([
+              repo.listObservations(),
+              repo.listCheckIns(),
+              repo.listEncounters(),
+            ]);
+            set({
+              observations: nextObservations,
+              checkIns: nextCheckIns,
+              encounters: nextEncounters,
+            });
+          })
+          .catch(() => undefined);
+      }
     } catch {
       set({
         hydrated: true,
@@ -158,8 +197,17 @@ export const useStore = create<State & Actions>((set, get) => ({
   },
 
   setLink: async (link) => {
+    const environment = get().environment;
     set({ link });
-    await repository.setConfig("prefs", { environment: get().environment, link });
+    await repository.setConfig("prefs", { environment, link });
+    if (apiConfigured) {
+      const result = await sendLink(link, environment);
+      if (result.ok) {
+        set({ serverReachable: true, serverDelayScale: result.link.delayScale });
+      } else {
+        set({ serverReachable: false });
+      }
+    }
     await get().advanceOutbox();
   },
 
@@ -201,6 +249,8 @@ export const useStore = create<State & Actions>((set, get) => ({
   },
 
   acknowledge: async (id) => {
+    // With a ground server, only the server can say a packet was acknowledged.
+    if (apiConfigured) return;
     const item = get().outbox.find((row) => row.id === id);
     if (!item || item.state === "acknowledged") return;
     const now = new Date().toISOString();
@@ -226,6 +276,26 @@ export const useStore = create<State & Actions>((set, get) => ({
 
   advanceOutbox: async (now = new Date()) => {
     const { outbox, link } = get();
+
+    if (apiConfigured) {
+      if (get().serverReachable === false) return;
+      for (const item of outbox.filter((row) => row.state === "queued")) {
+        if (posting.has(item.id)) continue;
+        posting.add(item.id);
+        try {
+          const result = await postPacket(item);
+          if (result.ok) {
+            set({ serverReachable: true });
+            await get().applyServerPacket(result.packet);
+          } else {
+            set({ serverReachable: result.status === 0 ? false : true });
+          }
+        } finally {
+          posting.delete(item.id);
+        }
+      }
+      return;
+    }
     const updates: OutboxItem[] = [];
     for (const item of outbox) {
       const next = nextOutboxState(item, link, now);
@@ -283,6 +353,32 @@ export const useStore = create<State & Actions>((set, get) => ({
 
   notify: (message, tone = "neutral") => set({ toast: { message, tone } }),
   clearToast: () => set({ toast: null }),
+
+  setServerStatus: (reachable, delayScale) =>
+    set({
+      serverReachable: reachable,
+      ...(delayScale !== undefined ? { serverDelayScale: delayScale } : {}),
+    }),
+
+  applyServerPacket: async (packet) => {
+    const item = packetToOutbox(packet);
+    set({
+      outbox: get().outbox.some((row) => row.id === item.id)
+        ? get().outbox.map((row) => (row.id === item.id ? item : row))
+        : [...get().outbox, item],
+    });
+    await repository.putOutboxItem(item);
+  },
+
+  reconcileOutbox: async (crewId) => {
+    const result = await fetchPackets(crewId);
+    if (!result.ok) {
+      if (result.status === 0) set({ serverReachable: false });
+      return;
+    }
+    set({ serverReachable: true });
+    for (const packet of result.packets) await get().applyServerPacket(packet);
+  },
 }));
 
 export function useCrew(id: string) {
