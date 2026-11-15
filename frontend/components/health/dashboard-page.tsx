@@ -289,7 +289,6 @@ function DashboardPage({
                   className={selected === area ? "selected" : ""}
                   onClick={() => onSelectArea(area)}
                 >
-                  {areaDisplayLabels[area]}
                 </button>
               ))}
             </div>
