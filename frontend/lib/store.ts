@@ -44,6 +44,7 @@ type State = {
   serverConfigured: boolean;
   serverReachable: boolean | null;
   serverDelayScale: number;
+  privateSync: Record<string, boolean>;
 };
 
 type Actions = {
@@ -67,6 +68,7 @@ type Actions = {
   lockPrivate: () => void;
   notify: (message: string, tone?: Toast["tone"]) => void;
   clearToast: () => void;
+  setPrivateSyncConsent: (crewId: string, allowed: boolean) => Promise<void>;
   setServerStatus: (reachable: boolean, delayScale?: number) => void;
   applyServerPacket: (packet: ServerPacket) => Promise<void>;
   reconcileOutbox: (crewId: string) => Promise<void>;
@@ -119,6 +121,7 @@ export const useStore = create<State & Actions>((set, get) => ({
   serverConfigured: apiConfigured,
   serverReachable: apiConfigured ? null : false,
   serverDelayScale: 1,
+  privateSync: {},
 
   hydrate: async (repo = repository) => {
     if (get().hydrated) return;
@@ -135,6 +138,7 @@ export const useStore = create<State & Actions>((set, get) => ({
           ),
         ]);
       const pinHash = await repo.getConfig<string>("pin");
+      const privateSync = (await repo.getConfig<Record<string, boolean>>("privateSync")) ?? {};
       if (observations.length === 0) {
         observations = seedObservations();
         await repo.putObservations(observations);
@@ -148,6 +152,7 @@ export const useStore = create<State & Actions>((set, get) => ({
         environment: prefs?.environment ?? missionConfig.environment,
         link: prefs?.link ?? "live",
         pinHash: pinHash ?? null,
+        privateSync,
         hydrated: true,
       });
 
@@ -353,6 +358,12 @@ export const useStore = create<State & Actions>((set, get) => ({
 
   notify: (message, tone = "neutral") => set({ toast: { message, tone } }),
   clearToast: () => set({ toast: null }),
+
+  setPrivateSyncConsent: async (crewId, allowed) => {
+    const next = { ...get().privateSync, [crewId]: allowed };
+    set({ privateSync: next });
+    await repository.setConfig("privateSync", next);
+  },
 
   setServerStatus: (reachable, delayScale) =>
     set({

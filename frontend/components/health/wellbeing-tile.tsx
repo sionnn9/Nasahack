@@ -34,6 +34,8 @@ export function WellbeingTile({
   const unlockPrivate = useStore((state) => state.unlockPrivate);
   const lockPrivate = useStore((state) => state.lockPrivate);
   const notify = useStore((state) => state.notify);
+  const privateSync = useStore((state) => state.privateSync[crewId] ?? false);
+  const setPrivateSyncConsent = useStore((state) => state.setPrivateSyncConsent);
   const [pin, setPinValue] = useState("");
   const [sheetOpen, setSheetOpen] = useState(false);
   const [error, setError] = useState("");
@@ -159,6 +161,23 @@ export function WellbeingTile({
           them.
         </p>
       </div>
+
+      <label className="private-sync-toggle">
+        <input
+          type="checkbox"
+          checked={privateSync}
+          onChange={(event) =>
+            void setPrivateSyncConsent(crewId, event.target.checked)
+          }
+        />
+        <span>
+          Also sync my private answers to the ground server
+          <em>
+            Off by default. Mood, stress, rested, connected and free text otherwise stay
+            on this device only.
+          </em>
+        </span>
+      </label>
 
       <button type="button" className="secondary-button" onClick={() => setSheetOpen(true)}>
         Request private support

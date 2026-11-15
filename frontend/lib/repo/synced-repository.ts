@@ -8,7 +8,26 @@ import type { Repository } from "@/lib/repo/repository";
 import { apiConfigured } from "@/lib/outbox/http-transport";
 
 const SYNC_CURSOR_KEY = "syncCursor";
+const PRIVATE_SYNC_KEY = "privateSync";
 const BATCH = 200;
+const PRIVATE_METRICS = new Set(["mood", "stress", "rested", "connected"]);
+const PRIVATE_CHECKIN_FIELDS = ["mood", "stress", "rested", "connected", "details"] as const;
+
+/** Exported so the privacy rule is testable without a network. */
+export function sendableObservations(
+  items: Observation[],
+  consent: Record<string, boolean>,
+): Observation[] {
+  return items.filter(
+    (item) => consent[item.crewId] === true || !PRIVATE_METRICS.has(item.metric),
+  );
+}
+
+export function stripPrivateCheckIn(checkIn: CheckIn): CheckIn {
+  const stripped = { ...checkIn } as Record<string, unknown>;
+  for (const field of PRIVATE_CHECKIN_FIELDS) delete stripped[field];
+  return stripped as unknown as CheckIn;
+}
 
 type Cursor = Record<string, number>;
 
@@ -53,17 +72,30 @@ export class SyncedRepository implements Repository {
     return this.local.setConfig<T>(key, value);
   }
 
+  private async privateConsent(): Promise<Record<string, boolean>> {
+    return (await this.local.getConfig<Record<string, boolean>>(PRIVATE_SYNC_KEY)) ?? {};
+  }
+
   async putObservations(items: Observation[]) {
     await this.local.putObservations(items);
     if (!apiConfigured) return;
-    this.pendingObservations.push(...items);
+    const consent = await this.privateConsent();
+    // Private answers stay on this device unless that crew member opted in.
+    const sendable = sendableObservations(items, consent);
+    if (sendable.length === 0) return;
+    this.pendingObservations.push(...sendable);
     void this.flush();
   }
 
   async putCheckIn(checkIn: CheckIn) {
     await this.local.putCheckIn(checkIn);
     if (!apiConfigured) return;
-    this.pendingCheckIns.push(checkIn);
+    const consent = await this.privateConsent();
+    let outbound: CheckIn = checkIn;
+    if (consent[checkIn.crewId] !== true) {
+      outbound = stripPrivateCheckIn(checkIn);
+    }
+    this.pendingCheckIns.push(outbound);
     void this.flush();
   }
 

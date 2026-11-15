@@ -17,6 +17,15 @@ import type { Observation, Quality } from "../types.js";
 
 type CollectionParams = { collection: string };
 
+const privateMetrics = new Set(["mood", "stress", "rested", "connected"]);
+const privateCheckInFields = ["mood", "stress", "rested", "connected", "details"] as const;
+
+/** Private answers stay on the device unless the query opts in explicitly. */
+function includesPrivate(request: { query: unknown }): boolean {
+  const value = (request.query as { includePrivate?: string }).includePrivate;
+  return value === "true" || value === "1";
+}
+
 function assertCollection(value: string): SyncCollection {
   if (!(syncedCollections as readonly string[]).includes(value)) {
     throw new ApiError(
@@ -72,9 +81,11 @@ export function registerSync(app: FastifyInstance, ctx: Ctx) {
   app.post<{ Params: CollectionParams }>("/v1/sync/:collection", async (request) => {
     const role = requireRole(ctx, request, ["crew"]);
     const collection = assertCollection(request.params.collection);
+    const includePrivate = includesPrivate(request);
     const now = ctx.now();
     const nowIso = now.toISOString();
     let applied = 0;
+    let skipped = 0;
 
     if (collection === "observations") {
       const items = parseOrThrow(observationSyncSchema, request.body);
@@ -92,6 +103,10 @@ export function registerSync(app: FastifyInstance, ctx: Ctx) {
       );
 
       for (const item of incoming) {
+        if (!includePrivate && privateMetrics.has(item.metric)) {
+          skipped += 1;
+          continue;
+        }
         const existing = ctx.db
           .prepare("SELECT id FROM observations WHERE id = ?")
           .get(item.id) as { id: string } | undefined;
@@ -141,15 +156,33 @@ export function registerSync(app: FastifyInstance, ctx: Ctx) {
          ON CONFLICT(id) DO UPDATE SET crew_id = excluded.crew_id, json = excluded.json,
            updated_seq = excluded.updated_seq`,
       );
-      for (const item of items) {
-        upsert.run(item.id, item.crewId, JSON.stringify(item), nextSeq(ctx.db));
+      for (const original of items) {
+        const item = original as Record<string, unknown> & { id: string; crewId: string };
+        let stored: Record<string, unknown> = item;
+        if (!includePrivate) {
+          stored = { ...item };
+          for (const field of privateCheckInFields) {
+            if (field in stored) {
+              delete stored[field];
+              skipped += 1;
+            }
+          }
+        }
+        upsert.run(item.id, item.crewId, JSON.stringify(stored), nextSeq(ctx.db));
         applied += 1;
       }
     }
 
     const cursor = currentSeq(ctx.db);
-    appendAudit(ctx.db, role, "sync.push", collection, { applied, cursor }, nowIso);
-    return { applied, cursor, serverTime: nowIso };
+    appendAudit(
+      ctx.db,
+      role,
+      "sync.push",
+      collection,
+      { applied, skipped, cursor, includePrivate },
+      nowIso,
+    );
+    return { applied, skipped, includePrivate, cursor, serverTime: nowIso };
   });
 
   app.get<{ Params: CollectionParams; Querystring: { since?: string; crewId?: string } }>(

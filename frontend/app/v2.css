@@ -1280,6 +1280,26 @@
   color: var(--muted);
   margin-top: 3px;
 }
+.private-sync-toggle {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 11px;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  margin-top: 10px;
+}
+.private-sync-toggle input {
+  margin-top: 2px;
+}
+.private-sync-toggle em {
+  display: block;
+  font-style: normal;
+  font-size: 10px;
+  color: var(--muted);
+  opacity: 0.8;
+}
 .wellbeing-note {
   display: flex;
   gap: 8px;
