@@ -47,7 +47,12 @@ export function registerSurgeon(app: FastifyInstance, ctx: Ctx) {
     const nowIso = now.toISOString();
     const link = readLink(ctx.db);
     const returnDelayMs = link.effectiveDelaySeconds * 1000;
-    const ackVisibleAt = new Date(now.getTime() + returnDelayMs).toISOString();
+    // In blackout the acknowledgement is recorded but held: ack_visible_at is
+    // left NULL and the scheduler assigns it when the link returns.
+    const held = link.state === "blackout";
+    const ackVisibleAt = held
+      ? null
+      : new Date(now.getTime() + returnDelayMs).toISOString();
 
     ctx.db
       .prepare(
@@ -62,7 +67,7 @@ export function registerSurgeon(app: FastifyInstance, ctx: Ctx) {
       "ground",
       "packet.ack",
       row.id,
-      { returnDelaySeconds: returnDelayMs / 1000, crewId: row.crew_id },
+      { returnDelaySeconds: held ? null : returnDelayMs / 1000, heldForBlackout: held, crewId: row.crew_id },
       nowIso,
     );
 

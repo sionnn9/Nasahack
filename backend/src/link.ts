@@ -38,7 +38,9 @@ export function effectiveDelayMs(
   environment: EnvironmentKey,
   delayScale: number,
 ): number {
-  if (state !== "delayed") return 0;
+  if (state === "live") return 0;
+  // Blackout holds work rather than making it instant: the scenario delay is
+  // still the honest estimate once the link returns.
   return SCENARIO_DELAYS[environment] * 1000 * delayScale;
 }
 

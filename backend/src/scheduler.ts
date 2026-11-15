@@ -1,6 +1,7 @@
 import type { Ctx } from "./context.js";
 import { appendAudit } from "./audit.js";
 import { getPacketRow, recordEvent, toPacketView, type PacketRow } from "./packets.js";
+import { effectiveDelayMs, readLink } from "./link.js";
 
 /**
  * All transitions are computed from stored timestamps and guarded by the
@@ -48,6 +49,36 @@ export function runDueTransitions(ctx: Ctx, now: Date = ctx.now()): TickResult {
     delivered.push(row.id);
     const updated = getPacketRow(ctx.db, row.id);
     if (updated) ctx.bus.emit({ type: "packet.delivered", data: toPacketView(ctx.db, updated) });
+  }
+
+  // Acknowledgements taken during blackout wait for the link to return; the
+  // return delay starts when it does, not when the surgeon clicked.
+  const link = readLink(ctx.db);
+  if (link.state !== "blackout") {
+    const held = ctx.db
+      .prepare(
+        `SELECT * FROM packets
+         WHERE state = 'delivered' AND ack_at IS NOT NULL AND ack_visible_at IS NULL`,
+      )
+      .all() as PacketRow[];
+    const delayMs = effectiveDelayMs(link.state, link.environment, link.delayScale);
+    const releaseAt = new Date(now.getTime() + delayMs).toISOString();
+    for (const row of held) {
+      ctx.db
+        .prepare(
+          `UPDATE packets SET ack_visible_at = ?
+           WHERE id = ? AND ack_visible_at IS NULL AND ack_at IS NOT NULL`,
+        )
+        .run(releaseAt, row.id);
+      appendAudit(
+        ctx.db,
+        "system",
+        "packet.ack.released",
+        row.id,
+        { returnDelaySeconds: delayMs / 1000, linkState: link.state },
+        nowIso,
+      );
+    }
   }
 
   const dueAcks = ctx.db
