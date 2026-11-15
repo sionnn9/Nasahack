@@ -32,13 +32,14 @@ import { AllReadings } from "./all-readings";
 import { ReadingDetails } from "./reading-details";
 import { BodyMap, LineChart } from "./visualizations";
 
-const areaDisplayLabels: Record<Exclude<BodyArea, "Radiation">, string> = {
+const areaDisplayLabels: Record<BodyArea, string> = {
   Head: "Mood/Sleep",
   Heart: "Heart rate",
   Arm: "Blood Pressure",
   Skin: "Skin temperature",
   Abdomen: "Blood Sugar",
   Legs: "Motion/Activity",
+  Radiation: "Radiation",
 };
 
 function DashboardPage({
@@ -249,6 +250,13 @@ function DashboardPage({
                     ? "Static environmental sample data."
                     : "Select a body area to explore its readings."}
                 </p>
+                <button
+                  className={`radiation-chip ${selected === "Radiation" ? "selected" : ""}`}
+                  onClick={() => onSelectArea("Radiation")}
+                >
+                  <span className="radiation-chip-dot" />
+                  Environment · Radiation (static data)
+                </button>
               </div>
               <button
                 className="text-button"
@@ -268,13 +276,6 @@ function DashboardPage({
                 labels={bodyLabels}
                 onSelect={onSelectArea}
               />
-              <button
-                className={`radiation-chip ${selected === "Radiation" ? "selected" : ""}`}
-                onClick={() => onSelectArea("Radiation")}
-              >
-                <span className="radiation-chip-dot" />
-                Environment · Radiation (static data)
-              </button>
             </div>
 
             <div className="area-list" aria-label="Choose body area">
@@ -283,7 +284,9 @@ function DashboardPage({
                   key={area}
                   className={selected === area ? "selected" : ""}
                   onClick={() => onSelectArea(area)}
-                ></button>
+                >
+                  {areaDisplayLabels[area]}
+                </button>
               ))}
             </div>
           </article>
