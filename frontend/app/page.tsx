@@ -215,6 +215,7 @@ function App() {
     setPage("daily");
     setSelected("Heart");
     setHeadTab("mood");
+    window.dispatchEvent(new Event("start-tutorial"));
   };
 
   const beginSensorCheck = () => {
