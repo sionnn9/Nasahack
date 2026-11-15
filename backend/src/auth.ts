@@ -11,7 +11,10 @@ import type { Role } from "./types.js";
 export function roleFor(ctx: Ctx, request: FastifyRequest): Role | null {
   const header = request.headers.authorization;
   const bearer = header?.startsWith("Bearer ") ? header.slice(7) : null;
-  const query = (request.query as { token?: string } | undefined)?.token ?? null;
+  // EventSource cannot set headers, so the stream route alone accepts ?token=.
+  const query = request.url.startsWith("/v1/stream")
+    ? ((request.query as { token?: string } | undefined)?.token ?? null)
+    : null;
   const token = bearer ?? query;
   if (!token) return null;
   if (token === ctx.config.crewKey) return "crew";
