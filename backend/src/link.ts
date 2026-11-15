@@ -67,11 +67,16 @@ export function readLink(db: Db): LinkView {
   });
 }
 
-export function writeLink(db: Db, state: LinkState, environment: EnvironmentKey): LinkView {
+export function writeLink(
+  db: Db,
+  state: LinkState,
+  environment: EnvironmentKey,
+  at: string = new Date().toISOString(),
+): LinkView {
   db.prepare("UPDATE link_state SET state = ?, environment = ?, changed_at = ? WHERE id = 1").run(
     state,
     environment,
-    new Date().toISOString(),
+    at,
   );
   return readLink(db);
 }

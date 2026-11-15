@@ -7,6 +7,7 @@ import { openDatabase, type Db } from "./db.js";
 import { ApiError } from "./errors.js";
 import { createBus, type Ctx } from "./context.js";
 import { registerHealth } from "./routes/health.js";
+import { registerLink } from "./routes/link.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -74,6 +75,7 @@ export async function buildApp(
   );
 
   registerHealth(app, ctx);
+  registerLink(app, ctx);
 
   app.addHook("onClose", async () => {
     if (ownsDb) db.close();
