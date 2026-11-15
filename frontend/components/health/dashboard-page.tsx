@@ -44,6 +44,8 @@ export function DashboardPage({ crewId }: { crewId: string }) {
   const enqueue = useStore((state) => state.enqueue);
   const notify = useStore((state) => state.notify);
   const environment = useStore((state) => state.environment);
+  const hydrated = useStore((state) => state.hydrated);
+  const pullForCrew = useStore((state) => state.pullForCrew);
 
   const simulation = useHealthSimulation(
     member?.restingHeartRate ?? 70,
@@ -60,6 +62,9 @@ export function DashboardPage({ crewId }: { crewId: string }) {
   const [isDemo, setIsDemo] = useState(false);
   const [replayNote, setReplayNote] = useState("");
   const [reminderNote, setReminderNote] = useState("");
+  // Live samples carry wall-clock times, which the server cannot know. Render
+  // them only after hydration so the SSR HTML and first client render match.
+  const [mounted, setMounted] = useState(false);
   // The vitals object changes every second; keep it in a ref so the 30 s
   // persistence timer is not torn down before it can fire.
   const vitalsRef = useRef(simulation.vitals);
@@ -75,6 +80,15 @@ export function DashboardPage({ crewId }: { crewId: string }) {
     },
     [],
   );
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated || !member) return;
+    void pullForCrew(crewId);
+  }, [crewId, hydrated, member, pullForCrew]);
 
   useEffect(() => {
     setIsDemo(new URLSearchParams(window.location.search).get("demo") === "1");
@@ -111,6 +125,7 @@ export function DashboardPage({ crewId }: { crewId: string }) {
   }, [addObservations, crewId, member]);
 
   const liveToday = useMemo<Partial<Record<Metric, ChartPoint[]>>>(() => {
+    if (!mounted) return {};
     const stamp = (index: number) =>
       new Date(Date.now() - (59 - index) * 1000).toISOString();
     const usable = simulation.quality === "Usable";
@@ -127,7 +142,7 @@ export function DashboardPage({ crewId }: { crewId: string }) {
       bp_systolic: build(simulation.histories.bloodPressure),
       motion: build(simulation.histories.motion),
     };
-  }, [simulation.histories, simulation.quality]);
+  }, [mounted, simulation.histories, simulation.quality]);
 
   const crewObservations = useMemo(
     () => observations.filter((entry) => entry.crewId === crewId),
@@ -514,7 +529,7 @@ export function DashboardPage({ crewId }: { crewId: string }) {
               type="button"
               onClick={async () => {
                 remoteAdapter.current?.disconnect();
-                const adapter = new RemoteSensorAdapter();
+                const adapter = new RemoteSensorAdapter(crewId);
                 remoteAdapter.current = adapter;
                 try {
                   await adapter.connect();

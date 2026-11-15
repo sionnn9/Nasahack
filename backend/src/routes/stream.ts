@@ -1,10 +1,45 @@
 import type { FastifyInstance } from "fastify";
 import type { Ctx, SseEvent } from "../context.js";
 import { requireRole } from "../auth.js";
+import { ApiError } from "../errors.js";
+import type { Role } from "../types.js";
+
+/**
+ * A stream subscriber only sees events it is allowed to see. Crew members see
+ * their own packets and samples; the ground console sees non-private packet
+ * events only.
+ */
+export function scopeEvent(
+  event: SseEvent,
+  role: Role,
+  crewId: string | null,
+): SseEvent | null {
+  if (event.type === "link.changed") return event;
+  const data = event.data as { crewId?: string; private?: boolean };
+  if (event.type === "sample") {
+    if (role !== "crew" || !crewId) return null;
+    return data.crewId === crewId ? event : null;
+  }
+  if (role === "crew") {
+    return crewId && data.crewId === crewId ? event : null;
+  }
+  if (role === "ground") {
+    return data.private === true ? null : event;
+  }
+  return null;
+}
 
 export function registerStream(app: FastifyInstance, ctx: Ctx) {
   app.get("/v1/stream", async (request, reply) => {
-    requireRole(ctx, request, ["crew", "ground"]);
+    const role = requireRole(ctx, request, ["crew", "ground"]);
+    const crewId = (request.query as { crewId?: string }).crewId ?? null;
+    if (role === "crew" && !crewId) {
+      throw new ApiError(
+        400,
+        "CREW_ID_REQUIRED",
+        "Crew streams must name the crew member with ?crewId=.",
+      );
+    }
 
     reply.hijack();
     reply.raw.writeHead(200, {
@@ -17,7 +52,9 @@ export function registerStream(app: FastifyInstance, ctx: Ctx) {
 
     const send = (event: SseEvent) => {
       if (reply.raw.writableEnded) return;
-      reply.raw.write(`event: ${event.type}\ndata: ${JSON.stringify(event.data)}\n\n`);
+      const scoped = scopeEvent(event, role, crewId);
+      if (!scoped) return;
+      reply.raw.write(`event: ${scoped.type}\ndata: ${JSON.stringify(scoped.data)}\n\n`);
     };
 
     const unsubscribe = ctx.bus.subscribe(send);

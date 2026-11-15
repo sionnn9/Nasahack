@@ -6,6 +6,7 @@ import { CheckCheck, Monitor } from "lucide-react";
 import { useStore } from "@/lib/store";
 import type { Handoff, OutboxItem } from "@/lib/types";
 import {
+  GROUND_SESSION_KEY,
   acknowledgeOnServer,
   connectStream,
   fetchSurgeonInbox,
@@ -27,12 +28,28 @@ export function SurgeonPage() {
 
   const [serverPackets, setServerPackets] = useState<ServerPacket[] | null>(null);
   const [streamNote, setStreamNote] = useState<string | null>(null);
+  const [groundKey, setGroundKey] = useState<string | null>(null);
+  const [keyInput, setKeyInput] = useState("");
+  const [loginError, setLoginError] = useState<string | null>(null);
+
+  // The ground credential is never in the bundle; it lives in this tab only.
+  useEffect(() => {
+    const stored = sessionStorage.getItem(GROUND_SESSION_KEY);
+    if (stored) setGroundKey(stored);
+  }, []);
+
+  const signOut = () => {
+    sessionStorage.removeItem(GROUND_SESSION_KEY);
+    setGroundKey(null);
+    setServerPackets(null);
+    setKeyInput("");
+  };
 
   useEffect(() => {
-    if (!serverConfigured) return;
+    if (!serverConfigured || !groundKey) return;
     let cancelled = false;
     const load = async () => {
-      const result = await fetchSurgeonInbox();
+      const result = await fetchSurgeonInbox(groundKey);
       if (cancelled) return;
       if (result.ok) {
         setServerPackets(result.packets);
@@ -41,21 +58,29 @@ export function SurgeonPage() {
       } else {
         setStreamNote(result.message);
         if (result.status === 0) setServerStatus(false);
+        if (result.status === 401 || result.status === 403) {
+          setLoginError("That key was not accepted. Ask for the ground key.");
+          sessionStorage.removeItem(GROUND_SESSION_KEY);
+          setGroundKey(null);
+        }
       }
     };
     void load();
-    const stop = connectStream({
-      onDelivered: () => void load(),
-      onAcknowledged: () => void load(),
-      onError: () => setStreamNote("Stream disconnected. Reconnecting and polling."),
-    });
+    const stop = connectStream(
+      {
+        onDelivered: () => void load(),
+        onAcknowledged: () => void load(),
+        onError: () => setStreamNote("Stream disconnected. Reconnecting and polling."),
+      },
+      { key: groundKey },
+    );
     const timer = window.setInterval(() => void load(), 5000);
     return () => {
       cancelled = true;
       stop();
       window.clearInterval(timer);
     };
-  }, [serverConfigured, setServerStatus]);
+  }, [groundKey, serverConfigured, setServerStatus]);
 
   const localReceived = outbox
     .filter((item) => item.state !== "queued")
@@ -69,7 +94,11 @@ export function SurgeonPage() {
       await acknowledge(item.id);
       return;
     }
-    const result = await acknowledgeOnServer(item.id);
+    if (!groundKey) {
+      setLoginError("Sign in with the ground key first.");
+      return;
+    }
+    const result = await acknowledgeOnServer(item.id, groundKey);
     if (!result.ok) {
       setStreamNote(result.message);
       if (result.status === 0) setServerStatus(false);
@@ -93,11 +122,57 @@ export function SurgeonPage() {
             hidden unless the astronaut shared them.
           </p>
         </div>
-        <Link className="secondary-button" href="/outbox">
-          Astronaut outbox
-        </Link>
+        <div className="surgeon-head-actions">
+          <Link className="secondary-button" href="/outbox">
+            Astronaut outbox
+          </Link>
+          {serverConfigured && groundKey && (
+            <button type="button" className="text-button" onClick={signOut}>
+              Sign out
+            </button>
+          )}
+        </div>
       </header>
 
+      {serverConfigured && !groundKey && (
+        <form
+          className="ground-login"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const key = keyInput.trim();
+            if (!key) return;
+            sessionStorage.setItem(GROUND_SESSION_KEY, key);
+            setGroundKey(key);
+            setLoginError(null);
+            setKeyInput("");
+          }}
+        >
+          <h2>Ground login</h2>
+          <p>
+            The ground key is not included in this page&apos;s code. Paste it for this
+            tab; it is kept in session storage and cleared when the tab closes.
+          </p>
+          <label htmlFor="ground-key">Ground key</label>
+          <input
+            id="ground-key"
+            type="password"
+            autoComplete="off"
+            value={keyInput}
+            onChange={(event) => setKeyInput(event.target.value)}
+          />
+          <button type="submit" className="primary-button">
+            Open console
+          </button>
+          {loginError && (
+            <p role="alert" className="field-error">
+              {loginError}
+            </p>
+          )}
+        </form>
+      )}
+
+      {(!serverConfigured || groundKey) && (
+        <>
       {serverConfigured && (
         <p className={`surgeon-server ${serverReachable ? "up" : "down"}`}>
           Ground server: {serverReachable ? "reachable" : "unreachable"}
@@ -210,6 +285,8 @@ export function SurgeonPage() {
             );
           })}
         </ul>
+      )}
+        </>
       )}
     </section>
   );

@@ -8,7 +8,26 @@ import type { Repository } from "@/lib/repo/repository";
 import { apiConfigured } from "@/lib/outbox/http-transport";
 
 const SYNC_CURSOR_KEY = "syncCursor";
+const PRIVATE_SYNC_KEY = "privateSync";
 const BATCH = 200;
+const PRIVATE_METRICS = new Set(["mood", "stress", "rested", "connected"]);
+const PRIVATE_CHECKIN_FIELDS = ["mood", "stress", "rested", "connected", "details"] as const;
+
+/** Exported so the privacy rule is testable without a network. */
+export function sendableObservations(
+  items: Observation[],
+  consent: Record<string, boolean>,
+): Observation[] {
+  return items.filter(
+    (item) => consent[item.crewId] === true || !PRIVATE_METRICS.has(item.metric),
+  );
+}
+
+export function stripPrivateCheckIn(checkIn: CheckIn): CheckIn {
+  const stripped = { ...checkIn } as Record<string, unknown>;
+  for (const field of PRIVATE_CHECKIN_FIELDS) delete stripped[field];
+  return stripped as unknown as CheckIn;
+}
 
 type Cursor = Record<string, number>;
 
@@ -53,17 +72,30 @@ export class SyncedRepository implements Repository {
     return this.local.setConfig<T>(key, value);
   }
 
+  private async privateConsent(): Promise<Record<string, boolean>> {
+    return (await this.local.getConfig<Record<string, boolean>>(PRIVATE_SYNC_KEY)) ?? {};
+  }
+
   async putObservations(items: Observation[]) {
     await this.local.putObservations(items);
     if (!apiConfigured) return;
-    this.pendingObservations.push(...items);
+    const consent = await this.privateConsent();
+    // Private answers stay on this device unless that crew member opted in.
+    const sendable = sendableObservations(items, consent);
+    if (sendable.length === 0) return;
+    this.pendingObservations.push(...sendable);
     void this.flush();
   }
 
   async putCheckIn(checkIn: CheckIn) {
     await this.local.putCheckIn(checkIn);
     if (!apiConfigured) return;
-    this.pendingCheckIns.push(checkIn);
+    const consent = await this.privateConsent();
+    let outbound: CheckIn = checkIn;
+    if (consent[checkIn.crewId] !== true) {
+      outbound = stripPrivateCheckIn(checkIn);
+    }
+    this.pendingCheckIns.push(outbound);
     void this.flush();
   }
 
@@ -109,8 +141,8 @@ export class SyncedRepository implements Repository {
     }
   }
 
-  /** Pull everything newer than the stored cursor. Returns how many rows landed. */
-  async pull(): Promise<number> {
+  /** Pull everything newer than the stored cursor for one crew member. */
+  async pull(crewId: string): Promise<number> {
     if (!apiConfigured) return 0;
     const cursor = (await this.getConfig<Cursor>(SYNC_CURSOR_KEY)) ?? {
       observations: 0,
@@ -119,31 +151,38 @@ export class SyncedRepository implements Repository {
     };
     let landed = 0;
     for (const collection of ["observations", "checkins", "encounters"] as const) {
-      try {
-        const response = await fetch(
-          `${(process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/+$/, "")}/v1/sync/${collection}?since=${cursor[collection] ?? 0}`,
-          {
-            headers: {
-              authorization: `Bearer ${process.env.NEXT_PUBLIC_CREW_KEY ?? ""}`,
+      let since = cursor[collection] ?? 0;
+      for (;;) {
+        try {
+          const response = await fetch(
+            `${(process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/+$/, "")}/v1/sync/${collection}?since=${since}&crewId=${encodeURIComponent(crewId)}`,
+            {
+              headers: {
+                authorization: `Bearer ${process.env.NEXT_PUBLIC_CREW_KEY ?? ""}`,
+              },
             },
-          },
-        );
-        if (!response.ok) continue;
-        const body = (await response.json()) as {
-          items: Array<Observation | CheckIn | Encounter>;
-          cursor: number;
-        };
-        if (collection === "observations") {
-          await this.local.putObservations(body.items as Observation[]);
-        } else if (collection === "checkins") {
-          for (const item of body.items as CheckIn[]) await this.local.putCheckIn(item);
-        } else {
-          for (const item of body.items as Encounter[]) await this.local.putEncounter(item);
+          );
+          if (!response.ok) break;
+          const body = (await response.json()) as {
+            items: Array<Observation | CheckIn | Encounter>;
+            cursor: number;
+            hasMore: boolean;
+          };
+          if (collection === "observations") {
+            await this.local.putObservations(body.items as Observation[]);
+          } else if (collection === "checkins") {
+            for (const item of body.items as CheckIn[]) await this.local.putCheckIn(item);
+          } else {
+            for (const item of body.items as Encounter[]) await this.local.putEncounter(item);
+          }
+          landed += body.items.length;
+          since = body.cursor;
+          cursor[collection] = since;
+          if (!body.hasMore) break;
+        } catch {
+          // Offline: keep the cursor and try again next start.
+          break;
         }
-        cursor[collection] = body.cursor;
-        landed += body.items.length;
-      } catch {
-        // Offline: keep the cursor and try again next start.
       }
     }
     await this.setConfig(SYNC_CURSOR_KEY, cursor);

@@ -135,6 +135,85 @@ describe("delivery and acknowledgement timing", () => {
     expect(secondAck).toBe(firstAck);
   });
 
+  it("holds an acknowledgement taken during blackout until the link returns", async () => {
+    const test = await delayedStation();
+    test.advance(1000);
+    runDueTransitions(test.app.ctx, test.now());
+
+    await test.app.inject({
+      method: "PUT",
+      url: "/v1/link",
+      headers: crew,
+      payload: { state: "blackout", environment: "station" },
+    });
+
+    const ack = await test.app.inject({
+      method: "POST",
+      url: "/v1/surgeon/packets/s1/ack",
+      headers: ground,
+    });
+    const held = (ack.json() as { packet: { ackAt: string | null; ackVisibleAt: string | null; state: string } })
+      .packet;
+    expect(held.ackAt).not.toBeNull();
+    expect(held.ackVisibleAt).toBeNull();
+    expect(held.state).toBe("delivered");
+
+    test.advance(10_000);
+    expect(runDueTransitions(test.app.ctx, test.now()).acknowledged).toEqual([]);
+    const stillHeld = await test.app.inject({
+      method: "GET",
+      url: "/v1/packets/s1?crewId=alex-morgan",
+      headers: crew,
+    });
+    expect((stillHeld.json() as { packet: { state: string } }).packet.state).toBe("delivered");
+
+    await test.app.inject({
+      method: "PUT",
+      url: "/v1/link",
+      headers: crew,
+      payload: { state: "delayed", environment: "station" },
+    });
+    expect(runDueTransitions(test.app.ctx, test.now()).acknowledged).toEqual([]);
+
+    test.advance(1000);
+    expect(runDueTransitions(test.app.ctx, test.now()).acknowledged).toEqual(["s1"]);
+    test.advance(5000);
+    expect(runDueTransitions(test.app.ctx, test.now()).acknowledged).toEqual([]);
+
+    const released = await test.app.inject({
+      method: "GET",
+      url: "/v1/packets/s1?crewId=alex-morgan",
+      headers: crew,
+    });
+    expect((released.json() as { packet: { state: string } }).packet.state).toBe("acknowledged");
+    const ackEvents = test.app.ctx.db
+      .prepare(
+        "SELECT COUNT(*) AS c FROM packet_events WHERE packet_id = 's1' AND state = 'acknowledged'",
+      )
+      .get() as { c: number };
+    expect(ackEvents.c).toBe(1);
+  });
+
+  it("still reports a scenario delay while in blackout", async () => {
+    const test = await delayedStation();
+    await test.app.inject({
+      method: "PUT",
+      url: "/v1/link",
+      headers: crew,
+      payload: { state: "blackout", environment: "station" },
+    });
+    const link = await test.app.inject({
+      method: "GET",
+      url: "/v1/link",
+      headers: crew,
+    });
+    const body = link.json() as {
+      link: { state: string; effectiveDelaySeconds: number };
+    };
+    expect(body.link.state).toBe("blackout");
+    expect(body.link.effectiveDelaySeconds).toBeGreaterThan(0);
+  });
+
   it("hides undelivered packets from the surgeon inbox", async () => {
     const test = await delayedStation();
     const inbox = await test.app.inject({

@@ -6,6 +6,7 @@ import { Particles } from "@/components/health/particles";
 import { LinkRibbon } from "@/components/shell/link-ribbon";
 import { EmergencyBar } from "@/components/shell/emergency-bar";
 import { useStore } from "@/lib/store";
+import { missionConfig } from "@/lib/mission-config";
 import {
   apiConfigured,
   connectStream,
@@ -26,6 +27,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const applyServerPacket = useStore((state) => state.applyServerPacket);
   const pathname = usePathname();
   const emergencyMode = pathname.startsWith("/emergency");
+  const routeCrewId = pathname.match(/^\/crew\/([^/]+)/)?.[1];
 
   useEffect(() => {
     void hydrate();
@@ -50,17 +52,25 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     };
     void check();
     const timer = window.setInterval(() => void check(), 15_000);
-    const stopStream = connectStream({
-      onDelivered: (packet) => void applyServerPacket(packet),
-      onAcknowledged: (packet) => void applyServerPacket(packet),
-      onError: () => setServerStatus(false),
-    });
+    const stopStream = connectStream(
+      {
+        onDelivered: (packet) => void applyServerPacket(packet),
+        onAcknowledged: (packet) => void applyServerPacket(packet),
+        onError: () => setServerStatus(false),
+      },
+      {
+        crewId:
+          routeCrewId ??
+          useStore.getState().outbox[0]?.crewId ??
+          missionConfig.crew[0]?.id,
+      },
+    );
     return () => {
       cancelled = true;
       window.clearInterval(timer);
       stopStream();
     };
-  }, [applyServerPacket, setServerStatus]);
+  }, [applyServerPacket, routeCrewId, setServerStatus]);
 
   useEffect(() => {
     if (!toast) return;

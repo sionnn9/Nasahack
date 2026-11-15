@@ -17,6 +17,15 @@ import type { Observation, Quality } from "../types.js";
 
 type CollectionParams = { collection: string };
 
+const privateMetrics = new Set(["mood", "stress", "rested", "connected"]);
+const privateCheckInFields = ["mood", "stress", "rested", "connected", "details"] as const;
+
+/** Private answers stay on the device unless the query opts in explicitly. */
+function includesPrivate(request: { query: unknown }): boolean {
+  const value = (request.query as { includePrivate?: string }).includePrivate;
+  return value === "true" || value === "1";
+}
+
 function assertCollection(value: string): SyncCollection {
   if (!(syncedCollections as readonly string[]).includes(value)) {
     throw new ApiError(
@@ -72,9 +81,11 @@ export function registerSync(app: FastifyInstance, ctx: Ctx) {
   app.post<{ Params: CollectionParams }>("/v1/sync/:collection", async (request) => {
     const role = requireRole(ctx, request, ["crew"]);
     const collection = assertCollection(request.params.collection);
+    const includePrivate = includesPrivate(request);
     const now = ctx.now();
     const nowIso = now.toISOString();
     let applied = 0;
+    let skipped = 0;
 
     if (collection === "observations") {
       const items = parseOrThrow(observationSyncSchema, request.body);
@@ -87,11 +98,16 @@ export function registerSync(app: FastifyInstance, ctx: Ctx) {
       );
       const updateQuality = ctx.db.prepare(
         `UPDATE observations
-         SET quality = ?, quality_reason = ?, raw_value = ?, updated_seq = ?
+         SET quality = ?, quality_reason = ?, raw_value = COALESCE(?, raw_value),
+           updated_seq = ?
          WHERE id = ?`,
       );
 
       for (const item of incoming) {
+        if (!includePrivate && privateMetrics.has(item.metric)) {
+          skipped += 1;
+          continue;
+        }
         const existing = ctx.db
           .prepare("SELECT id FROM observations WHERE id = ?")
           .get(item.id) as { id: string } | undefined;
@@ -141,43 +157,75 @@ export function registerSync(app: FastifyInstance, ctx: Ctx) {
          ON CONFLICT(id) DO UPDATE SET crew_id = excluded.crew_id, json = excluded.json,
            updated_seq = excluded.updated_seq`,
       );
-      for (const item of items) {
-        upsert.run(item.id, item.crewId, JSON.stringify(item), nextSeq(ctx.db));
+      for (const original of items) {
+        const item = original as Record<string, unknown> & { id: string; crewId: string };
+        let stored: Record<string, unknown> = item;
+        if (!includePrivate) {
+          stored = { ...item };
+          for (const field of privateCheckInFields) {
+            if (field in stored) {
+              delete stored[field];
+              skipped += 1;
+            }
+          }
+        }
+        upsert.run(item.id, item.crewId, JSON.stringify(stored), nextSeq(ctx.db));
         applied += 1;
       }
     }
 
     const cursor = currentSeq(ctx.db);
-    appendAudit(ctx.db, role, "sync.push", collection, { applied, cursor }, nowIso);
-    return { applied, cursor, serverTime: nowIso };
+    appendAudit(
+      ctx.db,
+      role,
+      "sync.push",
+      collection,
+      { applied, skipped, cursor, includePrivate },
+      nowIso,
+    );
+    return { applied, skipped, includePrivate, cursor, serverTime: nowIso };
   });
 
   app.get<{ Params: CollectionParams; Querystring: { since?: string; crewId?: string } }>(
     "/v1/sync/:collection",
     async (request) => {
-      const role = requireRole(ctx, request, ["crew"]);
+      const role = requireRole(ctx, request, ["crew", "ground"]);
       const collection = assertCollection(request.params.collection);
       const since = Number(request.query.since ?? 0);
       if (!Number.isFinite(since) || since < 0) {
         throw new ApiError(400, "BAD_CURSOR", "since must be a non-negative number.");
       }
       const crewId = request.query.crewId;
+      if (role === "crew" && !crewId) {
+        throw new ApiError(
+          400,
+          "CREW_ID_REQUIRED",
+          "Pass ?crewId= so the server can scope this pull to you.",
+        );
+      }
+
+      // The cursor is the last row actually returned, never the global counter:
+      // otherwise a page cut short would silently skip rows.
+      const limit = 1000;
 
       if (collection === "observations") {
         const rows = ctx.db
           .prepare(
             `SELECT * FROM observations
              WHERE updated_seq > ? AND (? IS NULL OR crew_id = ?)
-             ORDER BY updated_seq ASC LIMIT 1000`,
+             ORDER BY updated_seq ASC LIMIT ?`,
           )
-          .all(since, crewId ?? null, crewId ?? null) as ObservationRow[];
-        const items = rows.map(rowToObservation).map((item) => ({
+          .all(since, crewId ?? null, crewId ?? null, limit + 1) as ObservationRow[];
+        const page = rows.slice(0, limit);
+        const last = page[page.length - 1];
+        const items = page.map(rowToObservation).map((item) => ({
           ...item,
           plausibleRange: plausibilityRange(item.metric),
         }));
         return {
           items,
-          cursor: currentSeq(ctx.db),
+          cursor: last ? last.updated_seq : since,
+          hasMore: rows.length > limit,
           serverTime: ctx.now().toISOString(),
           gate: "server-side, demo rules",
         };
@@ -185,14 +233,20 @@ export function registerSync(app: FastifyInstance, ctx: Ctx) {
 
       const rows = ctx.db
         .prepare(
-          `SELECT json FROM ${collection}
+          `SELECT json, updated_seq FROM ${collection}
            WHERE updated_seq > ? AND (? IS NULL OR crew_id = ?)
-           ORDER BY updated_seq ASC LIMIT 1000`,
+           ORDER BY updated_seq ASC LIMIT ?`,
         )
-        .all(since, crewId ?? null, crewId ?? null) as Array<{ json: string }>;
+        .all(since, crewId ?? null, crewId ?? null, limit + 1) as Array<{
+        json: string;
+        updated_seq: number;
+      }>;
+      const page = rows.slice(0, limit);
+      const last = page[page.length - 1];
       return {
-        items: rows.map((row) => JSON.parse(row.json) as unknown),
-        cursor: currentSeq(ctx.db),
+        items: page.map((row) => JSON.parse(row.json) as unknown),
+        cursor: last ? last.updated_seq : since,
+        hasMore: rows.length > limit,
         serverTime: ctx.now().toISOString(),
       };
     },

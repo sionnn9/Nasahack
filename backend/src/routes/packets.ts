@@ -111,11 +111,18 @@ export function registerPackets(app: FastifyInstance, ctx: Ctx) {
   app.get<{ Params: { id: string }; Querystring: { crewId?: string } }>(
     "/v1/packets/:id",
     async (request) => {
-      requireRole(ctx, request, ["crew"]);
+      const role = requireRole(ctx, request, ["crew", "ground"]);
+      const crewId = request.query.crewId;
+      if (role === "crew" && !crewId) {
+        throw new ApiError(
+          400,
+          "CREW_ID_REQUIRED",
+          "Pass ?crewId= so the server can scope this packet to you.",
+        );
+      }
       runDueTransitions(ctx);
       const row = getPacketRow(ctx.db, request.params.id);
-      const crewId = request.query.crewId;
-      if (!row || (crewId && row.crew_id !== crewId)) {
+      if (!row || (role === "crew" && row.crew_id !== crewId)) {
         throw new ApiError(404, "NOT_FOUND", "No such packet for this crew member.");
       }
       return { packet: toPacketView(ctx.db, row), serverTime: ctx.now().toISOString() };
