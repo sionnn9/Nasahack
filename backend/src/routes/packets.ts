@@ -7,10 +7,12 @@ import { appendAudit } from "../audit.js";
 import { readLink } from "../link.js";
 import {
   getPacketRow,
+  listPacketRows,
   recordEvent,
   stripPrivate,
   toPacketView,
 } from "../packets.js";
+import { runDueTransitions } from "../scheduler.js";
 
 export function registerPackets(app: FastifyInstance, ctx: Ctx) {
   app.post("/v1/packets", async (request, reply) => {
@@ -102,5 +104,38 @@ export function registerPackets(app: FastifyInstance, ctx: Ctx) {
     return reply
       .status(201)
       .send({ packet: toPacketView(ctx.db, row), serverTime: nowIso, created: true });
+  });
+
+  // The crew key is shared by the whole crew, so scoping uses the crewId the
+  // client names. A packet belonging to someone else answers 404, not 403.
+  app.get<{ Params: { id: string }; Querystring: { crewId?: string } }>(
+    "/v1/packets/:id",
+    async (request) => {
+      requireRole(ctx, request, ["crew"]);
+      runDueTransitions(ctx);
+      const row = getPacketRow(ctx.db, request.params.id);
+      const crewId = request.query.crewId;
+      if (!row || (crewId && row.crew_id !== crewId)) {
+        throw new ApiError(404, "NOT_FOUND", "No such packet for this crew member.");
+      }
+      return { packet: toPacketView(ctx.db, row), serverTime: ctx.now().toISOString() };
+    },
+  );
+
+  app.get<{ Querystring: { crewId?: string } }>("/v1/packets", async (request) => {
+    requireRole(ctx, request, ["crew"]);
+    runDueTransitions(ctx);
+    const crewId = request.query.crewId;
+    if (!crewId) {
+      throw new ApiError(
+        400,
+        "CREW_ID_REQUIRED",
+        "Pass ?crewId= to list only that crew member's packets.",
+      );
+    }
+    return {
+      packets: listPacketRows(ctx.db, crewId).map((row) => toPacketView(ctx.db, row)),
+      serverTime: ctx.now().toISOString(),
+    };
   });
 }
