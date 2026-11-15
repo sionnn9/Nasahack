@@ -1653,7 +1653,7 @@ h1 {
 .radiation-chip {
   position: absolute;
   z-index: 1;
-  right: 0;
+  left: 0;
   top: 7px;
   display: flex;
   align-items: center;
@@ -2162,34 +2162,7 @@ h1 {
   color: var(--muted);
   font-size: 11px;
 }
-.timeline-events {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 14px;
-}
-.timeline-event {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 18px;
-  color: var(--muted);
-  font-size: 10px;
-}
-.timeline-event svg {
-  color: var(--accent);
-}
-.timeline-event b {
-  color: var(--text);
-  font-weight: 500;
-}
-.timeline-event time {
-  font:
-    9px "JetBrains Mono",
-    monospace;
-}
+
 .private-event {
   border-style: dashed;
 }

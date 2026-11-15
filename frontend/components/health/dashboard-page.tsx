@@ -350,30 +350,7 @@ function DashboardPage({
                 Poor contact · Sensor fit · 8 seconds · earlier today
               </p>
             )}
-            <div className="timeline-events" aria-label="Events today">
-              {events.map((event, index) => {
-                const EventIcon =
-                  event.kind === "exercise"
-                    ? Activity
-                    : event.kind === "meal"
-                      ? Utensils
-                      : Check;
-                return (
-                  <span className="timeline-event" key={`${event.label}-${index}`}>
-                    <EventIcon size={14} />
-                    <b>{event.label}</b>
-                    <time>{event.time ? `${event.time} UTC` : ""}</time>
-                  </span>
-                );
-              })}
-              {score !== null && (
-                <span className="timeline-event private-event">
-                  <Moon size={14} />
-                  <b>Private wellbeing check-in saved</b>
-                  <time>{checkIn.enteredAt} UTC</time>
-                </span>
-              )}
-            </div>
+          
           </article>
         </section>
 
