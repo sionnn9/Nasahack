@@ -7,7 +7,6 @@ import { useStore } from "@/lib/store";
 import type { Handoff, OutboxItem } from "@/lib/types";
 import {
   acknowledgeOnServer,
-  connectStream,
   fetchSurgeonInbox,
   packetToOutbox,
   type ServerPacket,
@@ -44,15 +43,9 @@ export function SurgeonPage() {
       }
     };
     void load();
-    const stop = connectStream({
-      onDelivered: () => void load(),
-      onAcknowledged: () => void load(),
-      onError: () => setStreamNote("Stream disconnected. Reconnecting and polling."),
-    });
     const timer = window.setInterval(() => void load(), 5000);
     return () => {
       cancelled = true;
-      stop();
       window.clearInterval(timer);
     };
   }, [serverConfigured, setServerStatus]);

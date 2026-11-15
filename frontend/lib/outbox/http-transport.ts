@@ -176,10 +176,17 @@ export type StreamHandlers = {
 };
 
 /** Same-origin replay of the server stream. Returns a disconnect function. */
-export function connectStream(handlers: StreamHandlers): () => void {
+export function connectStream(
+  handlers: StreamHandlers,
+  options: { crewId?: string; key?: string } = {},
+): () => void {
   if (!apiConfigured || typeof EventSource === "undefined") return () => undefined;
+  const key = options.key ?? crewKey;
+  const crewQuery = options.crewId
+    ? `&crewId=${encodeURIComponent(options.crewId)}`
+    : "";
   const source = new EventSource(
-    `${apiBase}/v1/stream?token=${encodeURIComponent(crewKey)}`,
+    `${apiBase}/v1/stream?token=${encodeURIComponent(key)}${crewQuery}`,
   );
   const parse = (event: MessageEvent) => JSON.parse(event.data) as unknown;
 
@@ -210,19 +217,25 @@ export class RemoteSensorAdapter implements SensorAdapter {
   private sampleListeners = new Set<(sample: Observation) => void>();
   private qualityListeners = new Set<(quality: Observation["quality"]) => void>();
 
+  constructor(private crewId: string) {}
+
   async connect() {
     if (!apiConfigured) {
       throw new Error("Set NEXT_PUBLIC_API_URL to use the remote sensor.");
     }
-    this.disconnectStream = connectStream({
-      onSample: (sample) => {
-        for (const listener of this.sampleListeners) listener(sample);
-        for (const listener of this.qualityListeners) listener(sample.quality);
+    this.disconnectStream = connectStream(
+      {
+        onSample: (sample) => {
+          if (sample.crewId !== this.crewId) return;
+          for (const listener of this.sampleListeners) listener(sample);
+          for (const listener of this.qualityListeners) listener(sample.quality);
+        },
+        onError: () => {
+          for (const listener of this.qualityListeners) listener("no_contact");
+        },
       },
-      onError: () => {
-        for (const listener of this.qualityListeners) listener("no_contact");
-      },
-    });
+      { crewId: this.crewId },
+    );
   }
 
   disconnect() {

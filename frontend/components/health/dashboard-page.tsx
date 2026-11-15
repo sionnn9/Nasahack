@@ -522,7 +522,7 @@ export function DashboardPage({ crewId }: { crewId: string }) {
               type="button"
               onClick={async () => {
                 remoteAdapter.current?.disconnect();
-                const adapter = new RemoteSensorAdapter();
+                const adapter = new RemoteSensorAdapter(crewId);
                 remoteAdapter.current = adapter;
                 try {
                   await adapter.connect();
