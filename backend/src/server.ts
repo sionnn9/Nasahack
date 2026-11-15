@@ -11,6 +11,7 @@ import { registerLink } from "./routes/link.js";
 import { registerPackets } from "./routes/packets.js";
 import { registerSurgeon } from "./routes/surgeon.js";
 import { registerStream } from "./routes/stream.js";
+import { registerSync } from "./routes/sync.js";
 import { startScheduler } from "./scheduler.js";
 
 declare module "fastify" {
@@ -85,6 +86,7 @@ export async function buildApp(
   registerPackets(app, ctx);
   registerSurgeon(app, ctx);
   registerStream(app, ctx);
+  registerSync(app, ctx);
 
   const stopScheduler = options.scheduler === false ? null : startScheduler(ctx);
 
