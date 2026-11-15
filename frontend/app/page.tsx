@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { DashboardPage } from "@/components/health/dashboard-page";
 import { EmergencyScreen } from "@/components/health/emergency-screen";
 import { FormDrawer } from "@/components/health/form-drawer";
 import { HomePage } from "@/components/health/home-page";
 import { ReportsPage } from "@/components/health/reports-page";
+import Tutorial from "@/components/health/tutorial";
 import { Particles } from "@/components/health/visualizations";
 import { VoiceServiceWorker } from "@/components/voice/voice-service-worker";
 import {
@@ -33,6 +34,7 @@ type PrivateSupportRequest = {
 
 const checkInStorageKey = `crewsignal-daily-checkins-v2:${new Date().toISOString().slice(0, 10)}`;
 const supportOutboxStorageKey = "crewsignal-private-outbox-v1";
+const tutorialSeenStoragePrefix = "crewsignal-tutorial-seen-v1";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -101,6 +103,10 @@ function parseSupportOutbox(raw: string | null): PrivateSupportRequest[] {
 
 function App() {
   const [astronaut, setAstronaut] = useState<CrewMember | null>(null);
+  const [tutorialForCrewId, setTutorialForCrewId] = useState<string | null>(
+    null,
+  );
+  const tutorialStarted = useRef(new Set<string>());
   const [page, setPage] = useState<PageName>("home");
   const [dark, setDark] = useState(true);
   const [selected, setSelected] = useState<BodyArea>("Heart");
@@ -139,7 +145,7 @@ function App() {
   );
   const activeAstronaut = astronaut ?? crew[0];
   const checkIn = astronaut
-    ? checkIns[astronaut.id] ?? createEmptyCheckIn()
+    ? (checkIns[astronaut.id] ?? createEmptyCheckIn())
     : createEmptyCheckIn();
   const wellbeingHistory = getWellbeingHistory(activeAstronaut.id);
   const supportRequested = supportOutbox.some(
@@ -190,7 +196,9 @@ function App() {
         JSON.stringify(supportOutbox),
       );
     } catch {
-      setToast("Changes are available for this session but could not be saved.");
+      setToast(
+        "Changes are available for this session but could not be saved.",
+      );
     }
   }, [checkIns, storageLoaded, supportOutbox]);
 
@@ -233,6 +241,21 @@ function App() {
     setPage("daily");
     setSelected("Heart");
     setHeadTab("mood");
+
+    if (tutorialStarted.current.has(person.id)) return;
+    tutorialStarted.current.add(person.id);
+    const tutorialSeenStorageKey = `${tutorialSeenStoragePrefix}:${person.id}`;
+    try {
+      if (localStorage.getItem(tutorialSeenStorageKey) === "true") return;
+      localStorage.setItem(tutorialSeenStorageKey, "true");
+    } catch {
+      showToast("Tutorial will only be shown once in this session.");
+    }
+    setTutorialForCrewId(person.id);
+  };
+
+  const replayTutorial = () => {
+    if (astronaut) setTutorialForCrewId(astronaut.id);
   };
 
   const beginSensorCheck = () => {
@@ -274,6 +297,15 @@ function App() {
       className={`app-shell ${dark ? "dark" : "light"} ${page === "emergency" ? "emergency-mode" : ""}`}
     >
       <VoiceServiceWorker />
+      <Tutorial
+        key={tutorialForCrewId ?? "closed"}
+        open={
+          tutorialForCrewId !== null && tutorialForCrewId === astronaut?.id
+        }
+        onOpenChange={(open) => {
+          if (!open) setTutorialForCrewId(null);
+        }}
+      />
       {page !== "emergency" && <Particles />}
 
       {page === "home" && (
@@ -364,6 +396,7 @@ function App() {
           onHeadTabChange={setHeadTab}
           onQualityOverrideChange={simulation.onQualityOverrideChange}
           onRequestSupport={requestPrivateSupport}
+          onReplayTutorial={replayTutorial}
         />
       )}
 
@@ -386,6 +419,7 @@ function App() {
           onToggleOffline={setOffline}
           onTogglePrivate={setIncludePrivate}
           onSend={() => showToast("Report queued for Earth.")}
+          onReplayTutorial={replayTutorial}
         />
       )}
 
@@ -409,10 +443,7 @@ function App() {
           <p>
             {who || "Crew member"}: {story || "Emergency support requested."}
           </p>
-          <button
-            className="text-button"
-            onClick={() => setPage("reports")}
-          >
+          <button className="text-button" onClick={() => setPage("reports")}>
             Add to Reports <ChevronRight />
           </button>
         </div>

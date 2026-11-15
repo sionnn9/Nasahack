@@ -5,6 +5,7 @@ import {
   Activity,
   ArrowLeft,
   Check,
+  CircleHelp,
   ChevronRight,
   Clock3,
   Database,
@@ -76,6 +77,7 @@ function DashboardPage({
   onQualityOverrideChange,
   onActivityModeChange,
   onRequestSupport,
+  onReplayTutorial,
 }: {
   astronaut: CrewMember;
   page: PageName;
@@ -105,6 +107,7 @@ function DashboardPage({
   onQualityOverrideChange: (value: QualityOverride) => void;
   onActivityModeChange?: (mode: ActivityMode) => void;
   onRequestSupport: () => void;
+  onReplayTutorial: () => void;
 }) {
   const [showDatasetModal, setShowDatasetModal] = useState(false);
   const activeDataset = getActiveAstronautDataset(astronaut.id);
@@ -180,6 +183,15 @@ function DashboardPage({
           </button>
         </div>
         <div className="nav-actions">
+          <button
+            className="nav-tutorial"
+            onClick={onReplayTutorial}
+            aria-label={`Replay tutorial for ${astronaut.name}`}
+            title="Replay tutorial"
+          >
+            <CircleHelp />
+            <span>Tutorial</span>
+          </button>
           <button
             className="icon-button"
             onClick={onThemeToggle}
