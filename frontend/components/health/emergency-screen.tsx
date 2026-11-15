@@ -123,7 +123,8 @@ export function EmergencyScreen({
   const interpretation = voice.interpretation;
   const isListening = voice.isListening ?? false;
   const isSpeaking = voice.isSpeaking ?? false;
-  const liveTranscript = voice.liveTranscript || voice.interimTranscript || voice.lastHeard || "";
+  const liveTranscript =
+    voice.liveTranscript || voice.interimTranscript || voice.lastHeard || "";
   const audioLevel = voice.audioLevel ?? 0;
 
   const showToast = (msg: string) => {
@@ -192,9 +193,16 @@ export function EmergencyScreen({
         </button>
 
         <div className="emergency-title-box">
-          <span className="emergency-main-title">CREW FIRST-RESPONSE HELPER</span>
+          <span className="emergency-main-title">
+            CREW FIRST-RESPONSE HELPER
+          </span>
           <span className="emergency-time-tag">
-            UTC {time.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+            UTC{" "}
+            {time.toLocaleTimeString("en-GB", {
+              hour: "2-digit",
+              minute: "2-digit",
+              second: "2-digit",
+            })}
           </span>
         </div>
 
@@ -202,12 +210,20 @@ export function EmergencyScreen({
           {/* Audio Visualizer Pill */}
           <div
             className={`voice-state-pill ${
-              isListening ? "state-listening" : isSpeaking ? "state-speaking" : "state-idle"
+              isListening
+                ? "state-listening"
+                : isSpeaking
+                  ? "state-speaking"
+                  : "state-idle"
             }`}
           >
             <span className="radar-dot" />
             <span className="state-label">
-              {isListening ? "Listening Live" : isSpeaking ? "Speaking Advice" : "Microphone Off"}
+              {isListening
+                ? "Listening Live"
+                : isSpeaking
+                  ? "Speaking Advice"
+                  : "Microphone Off"}
             </span>
           </div>
 
@@ -246,8 +262,12 @@ export function EmergencyScreen({
                 <Volume2 size={26} className="pulsing-speaker-icon" />
               </div>
               <div className="speaker-alert-text">
-                <span className="speaker-alert-headline">ASSISTANT IS SPEAKING ADVICE ALOUD</span>
-                <span className="speaker-alert-subtext">Tap the big button to immediately stop and silence speech</span>
+                <span className="speaker-alert-headline">
+                  ASSISTANT IS SPEAKING ADVICE ALOUD
+                </span>
+                <span className="speaker-alert-subtext">
+                  Tap the big button to immediately stop and silence speech
+                </span>
               </div>
             </div>
             <button
@@ -264,7 +284,10 @@ export function EmergencyScreen({
 
         {/* Banner to re-open pop-up if dismissed */}
         {interpretation && !showModal && (
-          <div className="reopen-modal-banner" onClick={() => setShowModal(true)}>
+          <div
+            className="reopen-modal-banner"
+            onClick={() => setShowModal(true)}
+          >
             <div className="reopen-left">
               {getCategoryIcon(interpretation.category)}
               <div>
@@ -281,15 +304,26 @@ export function EmergencyScreen({
         {/* =========================================================================
             PRIMARY "HEARING NOW" LIVE SPEECH MONITOR
            ========================================================================= */}
-        <div className={`live-speech-monitor-box ${isListening ? "is-listening" : ""}`}>
+        <div
+          className={`live-speech-monitor-box ${isListening ? "is-listening" : ""}`}
+        >
           <div className="monitor-top-bar">
             <div className="monitor-status-pill">
-              <span className={`live-record-indicator ${isListening ? "pulsing" : ""}`} />
-              <strong>{isListening ? "MICROPHONE ACTIVE · LISTENING" : "MICROPHONE OFF"}</strong>
+              <span
+                className={`live-record-indicator ${isListening ? "pulsing" : ""}`}
+              />
+              <strong>
+                {isListening
+                  ? "MICROPHONE ACTIVE · LISTENING"
+                  : "MICROPHONE OFF"}
+              </strong>
             </div>
 
             {/* Dynamic Sound Equalizer Bars reacting to voice volume */}
-            <div className="audio-level-equalizer" title={`Audio Level: ${audioLevel}%`}>
+            <div
+              className="audio-level-equalizer"
+              title={`Audio Level: ${audioLevel}%`}
+            >
               <span className="eq-label">AUDIO IN:</span>
               <div className="eq-bars">
                 <span
@@ -318,14 +352,18 @@ export function EmergencyScreen({
 
             {/* Engine Pill */}
             <div className="engine-tag">
-              {voice.speechEngineType || "On-Device Engine"} · Voice: {voice.ttsVoice || "Adam Male"}
+              {voice.speechEngineType || "On-Device Engine"} · Voice:{" "}
+              {voice.ttsVoice || "Adam Male"}
             </div>
           </div>
 
           {/* Microphone Access Alert if permission is prompt or denied */}
           {voice.micPermission !== "granted" && (
             <div className="mic-permission-banner">
-              <AlertTriangle size={18} className="text-amber-400 flex-shrink-0" />
+              <AlertTriangle
+                size={18}
+                className="text-amber-400 flex-shrink-0"
+              />
               <div className="permission-message">
                 <strong>
                   {voice.micPermission === "denied"
@@ -436,7 +474,11 @@ export function EmergencyScreen({
             placeholder="Or type/refine emergency symptoms here (e.g. 'Elena collapsed, bleeding on arm')..."
             className="voice-text-input"
           />
-          <button type="submit" className="submit-speech-btn" disabled={!manualText.trim()}>
+          <button
+            type="submit"
+            className="submit-speech-btn"
+            disabled={!manualText.trim()}
+          >
             Get Advice <ChevronRight size={16} />
           </button>
         </form>
@@ -449,7 +491,8 @@ export function EmergencyScreen({
               type="button"
               className="test-speech-chip"
               onClick={() => {
-                const sample = "Alex is having severe chest pain and can't breathe";
+                const sample =
+                  "Alex is having severe chest pain and can't breathe";
                 voice.stopListening?.();
                 voice.onProcessText?.(sample);
                 onStoryChange(sample);
@@ -503,8 +546,12 @@ export function EmergencyScreen({
         {/* Quick Emergency Category Presets */}
         <div className="quick-presets-section">
           <div className="preset-header">
-            <span className="preset-title">RAPID EMERGENCY PROTOCOL SELECTORS</span>
-            <span className="preset-hint">Tap any category to stop mic & open practical advice pop-up</span>
+            <span className="preset-title">
+              RAPID EMERGENCY PROTOCOL SELECTORS
+            </span>
+            <span className="preset-hint">
+              Tap any category to stop mic & open practical advice pop-up
+            </span>
           </div>
           <div className="preset-chips-grid">
             {emergencyPresets.map((preset) => (
@@ -517,7 +564,9 @@ export function EmergencyScreen({
                   setShowModal(true);
                 }}
                 className={`preset-chip ${
-                  interpretation?.category === preset.category ? "preset-chip-active" : ""
+                  interpretation?.category === preset.category
+                    ? "preset-chip-active"
+                    : ""
                 }`}
               >
                 {getCategoryIcon(preset.category)}
@@ -536,22 +585,26 @@ export function EmergencyScreen({
           <div className="voice-log-entries-horizontal">
             {voice.log.length === 0 ? (
               <p className="empty-log-note">
-                No voice events logged yet. Spoken statements and assistant actions will be recorded here.
+                No voice events logged yet. Spoken statements and assistant
+                actions will be recorded here.
               </p>
             ) : (
-              voice.log.slice(-6).reverse().map((entry, idx) => (
-                <div key={idx} className="voice-log-item">
-                  <span className="log-time">
-                    {new Date(entry.at).toLocaleTimeString("en-GB", {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                      second: "2-digit",
-                    })}
-                  </span>
-                  <div className="log-heard">“{entry.heard}”</div>
-                  <div className="log-answer">{entry.answer}</div>
-                </div>
-              ))
+              voice.log
+                .slice(-6)
+                .reverse()
+                .map((entry, idx) => (
+                  <div key={idx} className="voice-log-item">
+                    <span className="log-time">
+                      {new Date(entry.at).toLocaleTimeString("en-GB", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        second: "2-digit",
+                      })}
+                    </span>
+                    <div className="log-heard">“{entry.heard}”</div>
+                    <div className="log-answer">{entry.answer}</div>
+                  </div>
+                ))
             )}
           </div>
         </div>
@@ -562,22 +615,33 @@ export function EmergencyScreen({
           (Appears automatically when advice is generated; speaks ONLY this suggestion)
          ========================================================================= */}
       {showModal && interpretation && (
-        <div className="suggestions-modal-overlay" onClick={() => setShowModal(false)}>
-          <div className="suggestions-modal-card" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="suggestions-modal-overlay"
+          onClick={() => setShowModal(false)}
+        >
+          <div
+            className="suggestions-modal-card"
+            onClick={(e) => e.stopPropagation()}
+          >
             {/* Modal Header */}
             <div className="modal-header-bar">
               <div className="proto-title-group">
                 {getCategoryIcon(interpretation.category)}
                 <div>
-                  <h2 className="modal-proto-title">{interpretation.categoryLabel}</h2>
+                  <h2 className="modal-proto-title">
+                    {interpretation.categoryLabel}
+                  </h2>
                   <span className="modal-sub-label">
-                    Practical Crew First-Response · No Medical Diagnosis · Earth Flight Surgeon Linked
+                    Practical Crew First-Response · No Medical Diagnosis · Earth
+                    Flight Surgeon Linked
                   </span>
                 </div>
               </div>
 
               <div className="modal-top-controls">
-                <div className={`severity-badge severity-${interpretation.severity.toLowerCase()}`}>
+                <div
+                  className={`severity-badge severity-${interpretation.severity.toLowerCase()}`}
+                >
                   <AlertTriangle size={14} />
                   <span>{interpretation.severity} PRIORITY</span>
                 </div>
@@ -597,7 +661,12 @@ export function EmergencyScreen({
               <div className="patient-tag">
                 <User size={14} />
                 <span>
-                  Patient: <strong>{interpretation.affectedCrewName || who || "Any Crew Member"}</strong>
+                  Patient:{" "}
+                  <strong>
+                    {interpretation.affectedCrewName ||
+                      who ||
+                      "Any Crew Member"}
+                  </strong>
                 </span>
                 <button
                   type="button"
@@ -629,7 +698,9 @@ export function EmergencyScreen({
                       key={member.id}
                       type="button"
                       className={`crew-choice-pill ${
-                        (interpretation.affectedCrewName || who) === member.name ? "selected" : ""
+                        (interpretation.affectedCrewName || who) === member.name
+                          ? "selected"
+                          : ""
                       }`}
                       onClick={() => {
                         onWhoSelect(member.name);
@@ -646,7 +717,9 @@ export function EmergencyScreen({
             )}
 
             {/* Spoken Guidance Box (Only speaks this!) */}
-            <div className={`spoken-guidance-box ${isSpeaking ? "is-speaking" : ""}`}>
+            <div
+              className={`spoken-guidance-box ${isSpeaking ? "is-speaking" : ""}`}
+            >
               <div className="guidance-top">
                 <div className="guidance-label">
                   <Sparkles size={14} className="text-cyan-400" />
@@ -673,7 +746,7 @@ export function EmergencyScreen({
                   title="Play audio advice again"
                 >
                   <Volume2 size={16} />
-                  <span>Replay Audio</span>
+                  <span>Replay Audioo</span>
                 </button>
               </div>
             </div>
@@ -702,11 +775,17 @@ export function EmergencyScreen({
                       className={`step-checkbox ${action.completed ? "checked" : ""}`}
                       aria-label={`Mark step ${action.stepNumber} complete`}
                     >
-                      {action.completed ? <Check size={14} /> : <span>{action.stepNumber}</span>}
+                      {action.completed ? (
+                        <Check size={14} />
+                      ) : (
+                        <span>{action.stepNumber}</span>
+                      )}
                     </button>
 
                     <div className="step-content">
-                      <strong className="step-instruction">{action.instruction}</strong>
+                      <strong className="step-instruction">
+                        {action.instruction}
+                      </strong>
                       <p className="step-detail">{action.detail}</p>
 
                       {(action.equipment || action.location) && (
@@ -747,7 +826,8 @@ export function EmergencyScreen({
             {/* Microgravity Space-Specific Notes */}
             {interpretation.spaceSpecificNotes && (
               <div className="space-notes-box">
-                <strong>ZERO-G CLINICAL DYNAMICS:</strong> {interpretation.spaceSpecificNotes}
+                <strong>ZERO-G CLINICAL DYNAMICS:</strong>{" "}
+                {interpretation.spaceSpecificNotes}
               </div>
             )}
 
