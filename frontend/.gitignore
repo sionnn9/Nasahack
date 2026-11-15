@@ -25,3 +25,5 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+# raw research datasets (real data lives here, never committed)
+/data-raw

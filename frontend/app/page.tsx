@@ -8,6 +8,7 @@ import { FormDrawer } from "@/components/health/form-drawer";
 import { HomePage } from "@/components/health/home-page";
 import { ReportsPage } from "@/components/health/reports-page";
 import { Particles } from "@/components/health/visualizations";
+import { VoiceServiceWorker } from "@/components/voice/voice-service-worker";
 import {
   createEmptyCheckIn,
   crew,
@@ -20,6 +21,10 @@ import {
   type TimelineEvent,
 } from "@/components/health/health-data";
 import { useHealthSimulation } from "@/components/health/use-health-simulation";
+import {
+  useEmergencyVoice,
+  type VoiceLogEntry,
+} from "@/lib/voice/use-emergency-voice";
 
 type PrivateSupportRequest = {
   crewId: string;
@@ -115,6 +120,19 @@ function App() {
   const [story, setStory] = useState("");
   const [step, setStep] = useState(0);
   const [checking, setChecking] = useState(false);
+  const [voiceLog, setVoiceLog] = useState<VoiceLogEntry[]>([]);
+  const voice = useEmergencyVoice({
+    onCrew: setWho,
+    onStoryAppend: (text) =>
+      setStory((current) => (current ? `${current} ${text}` : text)),
+    onUiStep: setStep,
+    onAlertCrew: () => {
+      setStep(4);
+      setSaved(true);
+    },
+    onContactMedical: () => setSaved(true),
+    onLog: (entry) => setVoiceLog((current) => [...current, entry]),
+  });
   const simulation = useHealthSimulation(
     astronaut?.restingHeartRate ?? crew[0].restingHeartRate,
     astronaut?.id ?? crew[0].id,
@@ -223,6 +241,8 @@ function App() {
   };
 
   const sendEmergency = () => {
+    // The microphone needs this click's user gesture; the model loads after.
+    voice.beginFromGesture();
     setPage("emergency");
     setStep(0);
   };
@@ -253,6 +273,7 @@ function App() {
     <main
       className={`app-shell ${dark ? "dark" : "light"} ${page === "emergency" ? "emergency-mode" : ""}`}
     >
+      <VoiceServiceWorker />
       {page !== "emergency" && <Particles />}
 
       {page === "home" && (
@@ -280,6 +301,34 @@ function App() {
           onStoryChange={setStory}
           onContinue={() => setStep((current) => current + 1)}
           onReportView={() => setPage("reports")}
+          voice={{
+            statusLabel: voice.statusLabel,
+            note: voice.note,
+            lastHeard: voice.lastHeard,
+            languageCode: voice.language.code,
+            languages: voice.languages,
+            onLanguage: voice.changeLanguage,
+            log: voiceLog,
+            interpretation: voice.interpretation,
+            isListening: voice.isListening,
+            isSpeaking: voice.isSpeaking,
+            liveTranscript: voice.liveTranscript,
+            interimTranscript: voice.interimTranscript,
+            audioLevel: voice.audioLevel,
+            micPermission: voice.micPermission,
+            speechEngineType: voice.speechEngineType,
+            clearLiveTranscript: voice.clearLiveTranscript,
+            startListening: voice.startListening,
+            toggleListening: voice.toggleListening,
+            replayGuidance: voice.replayGuidance,
+            onPresetSelect: voice.setManualInterpretation,
+            onToggleActionStep: voice.toggleActionStep,
+            onProcessText: voice.processTextInput,
+            isBroadcastingAlarm: voice.isBroadcastingAlarm,
+            triggerBroadcastAlarm: voice.triggerBroadcastAlarm,
+            isGroundLinkActive: voice.isGroundLinkActive,
+            triggerGroundLink: voice.triggerGroundLink,
+          }}
         />
       )}
 
