@@ -4,7 +4,7 @@ import { requireRole } from "../auth.js";
 import { ApiError } from "../errors.js";
 import { readLink } from "../link.js";
 import { appendAudit } from "../audit.js";
-import { getPacketRow, recordEvent, toPacketView, type PacketRow } from "../packets.js";
+import { getPacketRow, toPacketView, type PacketRow } from "../packets.js";
 import { runDueTransitions } from "../scheduler.js";
 
 export function registerSurgeon(app: FastifyInstance, ctx: Ctx) {
@@ -55,13 +55,8 @@ export function registerSurgeon(app: FastifyInstance, ctx: Ctx) {
       )
       .run(nowIso, ackVisibleAt, row.id);
 
-    recordEvent(
-      ctx.db,
-      row.id,
-      "delivered",
-      nowIso,
-      `Flight surgeon acknowledged. The crew sees it in ${Math.round(returnDelayMs / 1000)} s.`,
-    );
+    // The acknowledgement event is written by the scheduler when the return
+    // delay actually elapses, so the crew's history never shows it early.
     appendAudit(
       ctx.db,
       "ground",
