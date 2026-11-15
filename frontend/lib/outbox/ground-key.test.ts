@@ -23,7 +23,12 @@ function sourceFiles(dir: string, found: string[] = []): string[] {
 describe("ground credential exposure", () => {
   it("does not reference a public ground key anywhere in the app source", () => {
     const root = process.cwd();
-    const hits = sourceFiles(root)
+    // Only the directories that are bundled for the browser. The e2e harness
+    // lives in e2e/ and is never shipped to a client.
+    const bundled = ["app", "components", "lib"].flatMap((dir) =>
+      sourceFiles(join(root, dir)),
+    );
+    const hits = bundled
       .filter((path) => !path.endsWith("ground-key.test.ts"))
       .filter((path) => {
         const text = readFileSync(path, "utf8");

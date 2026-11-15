@@ -1,7 +1,7 @@
 ================================================================
  CREWSIGNAL / NASAHACK — FULL SOURCE DUMP
  repo: https://github.com/sionnn9/Nasahack (main)
- generated: 2026-11-15 05:17 UTC
+ generated: 2026-11-15 05:55 UTC
  note: lockfiles, docs, binary/static assets in public/ (except
        sw.js and the sample CSV), build output, databases and
        env files are excluded.
@@ -258,7 +258,7 @@ export function unauthorized(reply: FastifyReply) {
 
 ================================================================
  FILE: backend/src/config.ts
- lines: 44
+ lines: 60
 ================================================================
 import { z } from "zod";
 
@@ -284,6 +284,9 @@ const envSchema = z.object({
   DELAY_SCALE: z.coerce.number().positive().default(1),
 });
 
+const DEMO_KEYS = ["crew-demo-key", "ground-demo-key", "device-demo-key"];
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const parsed = envSchema.safeParse(env);
   if (!parsed.success) {
@@ -293,6 +296,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error(`Invalid backend configuration: ${issues}`);
   }
   const value = parsed.data;
+
+  // Binding to a non-loopback interface with the published demo keys would put
+  // the demo on the network. Refuse instead of starting quietly.
+  const defaultKeysInUse =
+    DEMO_KEYS.includes(value.CREW_KEY) ||
+    DEMO_KEYS.includes(value.GROUND_KEY) ||
+    DEMO_KEYS.includes(value.DEVICE_KEY);
+  if (!LOOPBACK_HOSTS.has(value.HOST) && defaultKeysInUse) {
+    throw new Error(
+      `Refusing to start on HOST=${value.HOST} while a demo key is still in use. ` +
+        "Set CREW_KEY, GROUND_KEY and DEVICE_KEY, or bind to 127.0.0.1 or localhost.",
+    );
+  }
   return {
     port: value.PORT,
     host: value.HOST,
@@ -532,7 +548,7 @@ export function parseOrThrow<T extends z.ZodType>(schema: T, value: unknown): z.
 
 ================================================================
  FILE: backend/src/link.ts
- lines: 82
+ lines: 84
 ================================================================
 import type { Db } from "./db.js";
 import type { EnvironmentKey, LinkState } from "./types.js";
@@ -574,7 +590,9 @@ export function effectiveDelayMs(
   environment: EnvironmentKey,
   delayScale: number,
 ): number {
-  if (state !== "delayed") return 0;
+  if (state === "live") return 0;
+  // Blackout holds work rather than making it instant: the scenario delay is
+  // still the honest estimate once the link returns.
   return SCENARIO_DELAYS[environment] * 1000 * delayScale;
 }
 
@@ -1180,7 +1198,7 @@ export function registerLink(app: FastifyInstance, ctx: Ctx) {
 
 ================================================================
  FILE: backend/src/routes/packets.ts
- lines: 141
+ lines: 148
 ================================================================
 import type { FastifyInstance } from "fastify";
 import type { Ctx } from "../context.js";
@@ -1295,11 +1313,18 @@ export function registerPackets(app: FastifyInstance, ctx: Ctx) {
   app.get<{ Params: { id: string }; Querystring: { crewId?: string } }>(
     "/v1/packets/:id",
     async (request) => {
-      requireRole(ctx, request, ["crew"]);
+      const role = requireRole(ctx, request, ["crew", "ground"]);
+      const crewId = request.query.crewId;
+      if (role === "crew" && !crewId) {
+        throw new ApiError(
+          400,
+          "CREW_ID_REQUIRED",
+          "Pass ?crewId= so the server can scope this packet to you.",
+        );
+      }
       runDueTransitions(ctx);
       const row = getPacketRow(ctx.db, request.params.id);
-      const crewId = request.query.crewId;
-      if (!row || (crewId && row.crew_id !== crewId)) {
+      if (!row || (role === "crew" && row.crew_id !== crewId)) {
         throw new ApiError(404, "NOT_FOUND", "No such packet for this crew member.");
       }
       return { packet: toPacketView(ctx.db, row), serverTime: ctx.now().toISOString() };
@@ -1326,15 +1351,50 @@ export function registerPackets(app: FastifyInstance, ctx: Ctx) {
 
 ================================================================
  FILE: backend/src/routes/stream.ts
- lines: 43
+ lines: 80
 ================================================================
 import type { FastifyInstance } from "fastify";
 import type { Ctx, SseEvent } from "../context.js";
 import { requireRole } from "../auth.js";
+import { ApiError } from "../errors.js";
+import type { Role } from "../types.js";
+
+/**
+ * A stream subscriber only sees events it is allowed to see. Crew members see
+ * their own packets and samples; the ground console sees non-private packet
+ * events only.
+ */
+export function scopeEvent(
+  event: SseEvent,
+  role: Role,
+  crewId: string | null,
+): SseEvent | null {
+  if (event.type === "link.changed") return event;
+  const data = event.data as { crewId?: string; private?: boolean };
+  if (event.type === "sample") {
+    if (role !== "crew" || !crewId) return null;
+    return data.crewId === crewId ? event : null;
+  }
+  if (role === "crew") {
+    return crewId && data.crewId === crewId ? event : null;
+  }
+  if (role === "ground") {
+    return data.private === true ? null : event;
+  }
+  return null;
+}
 
 export function registerStream(app: FastifyInstance, ctx: Ctx) {
   app.get("/v1/stream", async (request, reply) => {
-    requireRole(ctx, request, ["crew", "ground"]);
+    const role = requireRole(ctx, request, ["crew", "ground"]);
+    const crewId = (request.query as { crewId?: string }).crewId ?? null;
+    if (role === "crew" && !crewId) {
+      throw new ApiError(
+        400,
+        "CREW_ID_REQUIRED",
+        "Crew streams must name the crew member with ?crewId=.",
+      );
+    }
 
     reply.hijack();
     reply.raw.writeHead(200, {
@@ -1347,7 +1407,9 @@ export function registerStream(app: FastifyInstance, ctx: Ctx) {
 
     const send = (event: SseEvent) => {
       if (reply.raw.writableEnded) return;
-      reply.raw.write(`event: ${event.type}\ndata: ${JSON.stringify(event.data)}\n\n`);
+      const scoped = scopeEvent(event, role, crewId);
+      if (!scoped) return;
+      reply.raw.write(`event: ${scoped.type}\ndata: ${JSON.stringify(scoped.data)}\n\n`);
     };
 
     const unsubscribe = ctx.bus.subscribe(send);
@@ -1374,7 +1436,7 @@ export function registerStream(app: FastifyInstance, ctx: Ctx) {
 
 ================================================================
  FILE: backend/src/routes/surgeon.ts
- lines: 77
+ lines: 82
 ================================================================
 import type { FastifyInstance } from "fastify";
 import type { Ctx } from "../context.js";
@@ -1425,7 +1487,12 @@ export function registerSurgeon(app: FastifyInstance, ctx: Ctx) {
     const nowIso = now.toISOString();
     const link = readLink(ctx.db);
     const returnDelayMs = link.effectiveDelaySeconds * 1000;
-    const ackVisibleAt = new Date(now.getTime() + returnDelayMs).toISOString();
+    // In blackout the acknowledgement is recorded but held: ack_visible_at is
+    // left NULL and the scheduler assigns it when the link returns.
+    const held = link.state === "blackout";
+    const ackVisibleAt = held
+      ? null
+      : new Date(now.getTime() + returnDelayMs).toISOString();
 
     ctx.db
       .prepare(
@@ -1440,7 +1507,7 @@ export function registerSurgeon(app: FastifyInstance, ctx: Ctx) {
       "ground",
       "packet.ack",
       row.id,
-      { returnDelaySeconds: returnDelayMs / 1000, crewId: row.crew_id },
+      { returnDelaySeconds: held ? null : returnDelayMs / 1000, heldForBlackout: held, crewId: row.crew_id },
       nowIso,
     );
 
@@ -1456,7 +1523,7 @@ export function registerSurgeon(app: FastifyInstance, ctx: Ctx) {
 
 ================================================================
  FILE: backend/src/routes/sync.ts
- lines: 200
+ lines: 254
 ================================================================
 import type { FastifyInstance } from "fastify";
 import { ApiError, parseOrThrow } from "../errors.js";
@@ -1476,6 +1543,15 @@ import { plausibilityRange } from "../quality/gate.js";
 import type { Observation, Quality } from "../types.js";
 
 type CollectionParams = { collection: string };
+
+const privateMetrics = new Set(["mood", "stress", "rested", "connected"]);
+const privateCheckInFields = ["mood", "stress", "rested", "connected", "details"] as const;
+
+/** Private answers stay on the device unless the query opts in explicitly. */
+function includesPrivate(request: { query: unknown }): boolean {
+  const value = (request.query as { includePrivate?: string }).includePrivate;
+  return value === "true" || value === "1";
+}
 
 function assertCollection(value: string): SyncCollection {
   if (!(syncedCollections as readonly string[]).includes(value)) {
@@ -1532,9 +1608,11 @@ export function registerSync(app: FastifyInstance, ctx: Ctx) {
   app.post<{ Params: CollectionParams }>("/v1/sync/:collection", async (request) => {
     const role = requireRole(ctx, request, ["crew"]);
     const collection = assertCollection(request.params.collection);
+    const includePrivate = includesPrivate(request);
     const now = ctx.now();
     const nowIso = now.toISOString();
     let applied = 0;
+    let skipped = 0;
 
     if (collection === "observations") {
       const items = parseOrThrow(observationSyncSchema, request.body);
@@ -1547,11 +1625,16 @@ export function registerSync(app: FastifyInstance, ctx: Ctx) {
       );
       const updateQuality = ctx.db.prepare(
         `UPDATE observations
-         SET quality = ?, quality_reason = ?, raw_value = ?, updated_seq = ?
+         SET quality = ?, quality_reason = ?, raw_value = COALESCE(?, raw_value),
+           updated_seq = ?
          WHERE id = ?`,
       );
 
       for (const item of incoming) {
+        if (!includePrivate && privateMetrics.has(item.metric)) {
+          skipped += 1;
+          continue;
+        }
         const existing = ctx.db
           .prepare("SELECT id FROM observations WHERE id = ?")
           .get(item.id) as { id: string } | undefined;
@@ -1601,43 +1684,75 @@ export function registerSync(app: FastifyInstance, ctx: Ctx) {
          ON CONFLICT(id) DO UPDATE SET crew_id = excluded.crew_id, json = excluded.json,
            updated_seq = excluded.updated_seq`,
       );
-      for (const item of items) {
-        upsert.run(item.id, item.crewId, JSON.stringify(item), nextSeq(ctx.db));
+      for (const original of items) {
+        const item = original as Record<string, unknown> & { id: string; crewId: string };
+        let stored: Record<string, unknown> = item;
+        if (!includePrivate) {
+          stored = { ...item };
+          for (const field of privateCheckInFields) {
+            if (field in stored) {
+              delete stored[field];
+              skipped += 1;
+            }
+          }
+        }
+        upsert.run(item.id, item.crewId, JSON.stringify(stored), nextSeq(ctx.db));
         applied += 1;
       }
     }
 
     const cursor = currentSeq(ctx.db);
-    appendAudit(ctx.db, role, "sync.push", collection, { applied, cursor }, nowIso);
-    return { applied, cursor, serverTime: nowIso };
+    appendAudit(
+      ctx.db,
+      role,
+      "sync.push",
+      collection,
+      { applied, skipped, cursor, includePrivate },
+      nowIso,
+    );
+    return { applied, skipped, includePrivate, cursor, serverTime: nowIso };
   });
 
   app.get<{ Params: CollectionParams; Querystring: { since?: string; crewId?: string } }>(
     "/v1/sync/:collection",
     async (request) => {
-      const role = requireRole(ctx, request, ["crew"]);
+      const role = requireRole(ctx, request, ["crew", "ground"]);
       const collection = assertCollection(request.params.collection);
       const since = Number(request.query.since ?? 0);
       if (!Number.isFinite(since) || since < 0) {
         throw new ApiError(400, "BAD_CURSOR", "since must be a non-negative number.");
       }
       const crewId = request.query.crewId;
+      if (role === "crew" && !crewId) {
+        throw new ApiError(
+          400,
+          "CREW_ID_REQUIRED",
+          "Pass ?crewId= so the server can scope this pull to you.",
+        );
+      }
+
+      // The cursor is the last row actually returned, never the global counter:
+      // otherwise a page cut short would silently skip rows.
+      const limit = 1000;
 
       if (collection === "observations") {
         const rows = ctx.db
           .prepare(
             `SELECT * FROM observations
              WHERE updated_seq > ? AND (? IS NULL OR crew_id = ?)
-             ORDER BY updated_seq ASC LIMIT 1000`,
+             ORDER BY updated_seq ASC LIMIT ?`,
           )
-          .all(since, crewId ?? null, crewId ?? null) as ObservationRow[];
-        const items = rows.map(rowToObservation).map((item) => ({
+          .all(since, crewId ?? null, crewId ?? null, limit + 1) as ObservationRow[];
+        const page = rows.slice(0, limit);
+        const last = page[page.length - 1];
+        const items = page.map(rowToObservation).map((item) => ({
           ...item,
           plausibleRange: plausibilityRange(item.metric),
         }));
         return {
           items,
-          cursor: currentSeq(ctx.db),
+          cursor: last ? last.updated_seq : since,
+          hasMore: rows.length > limit,
           serverTime: ctx.now().toISOString(),
           gate: "server-side, demo rules",
         };
@@ -1645,14 +1760,20 @@ export function registerSync(app: FastifyInstance, ctx: Ctx) {
 
       const rows = ctx.db
         .prepare(
-          `SELECT json FROM ${collection}
+          `SELECT json, updated_seq FROM ${collection}
            WHERE updated_seq > ? AND (? IS NULL OR crew_id = ?)
-           ORDER BY updated_seq ASC LIMIT 1000`,
+           ORDER BY updated_seq ASC LIMIT ?`,
         )
-        .all(since, crewId ?? null, crewId ?? null) as Array<{ json: string }>;
+        .all(since, crewId ?? null, crewId ?? null, limit + 1) as Array<{
+        json: string;
+        updated_seq: number;
+      }>;
+      const page = rows.slice(0, limit);
+      const last = page[page.length - 1];
       return {
-        items: rows.map((row) => JSON.parse(row.json) as unknown),
-        cursor: currentSeq(ctx.db),
+        items: page.map((row) => JSON.parse(row.json) as unknown),
+        cursor: last ? last.updated_seq : since,
+        hasMore: rows.length > limit,
         serverTime: ctx.now().toISOString(),
       };
     },
@@ -1661,11 +1782,12 @@ export function registerSync(app: FastifyInstance, ctx: Ctx) {
 
 ================================================================
  FILE: backend/src/scheduler.ts
- lines: 105
+ lines: 136
 ================================================================
 import type { Ctx } from "./context.js";
 import { appendAudit } from "./audit.js";
 import { getPacketRow, recordEvent, toPacketView, type PacketRow } from "./packets.js";
+import { effectiveDelayMs, readLink } from "./link.js";
 
 /**
  * All transitions are computed from stored timestamps and guarded by the
@@ -1713,6 +1835,36 @@ export function runDueTransitions(ctx: Ctx, now: Date = ctx.now()): TickResult {
     delivered.push(row.id);
     const updated = getPacketRow(ctx.db, row.id);
     if (updated) ctx.bus.emit({ type: "packet.delivered", data: toPacketView(ctx.db, updated) });
+  }
+
+  // Acknowledgements taken during blackout wait for the link to return; the
+  // return delay starts when it does, not when the surgeon clicked.
+  const link = readLink(ctx.db);
+  if (link.state !== "blackout") {
+    const held = ctx.db
+      .prepare(
+        `SELECT * FROM packets
+         WHERE state = 'delivered' AND ack_at IS NOT NULL AND ack_visible_at IS NULL`,
+      )
+      .all() as PacketRow[];
+    const delayMs = effectiveDelayMs(link.state, link.environment, link.delayScale);
+    const releaseAt = new Date(now.getTime() + delayMs).toISOString();
+    for (const row of held) {
+      ctx.db
+        .prepare(
+          `UPDATE packets SET ack_visible_at = ?
+           WHERE id = ? AND ack_visible_at IS NULL AND ack_at IS NOT NULL`,
+        )
+        .run(releaseAt, row.id);
+      appendAudit(
+        ctx.db,
+        "system",
+        "packet.ack.released",
+        row.id,
+        { returnDelaySeconds: delayMs / 1000, linkState: link.state },
+        nowIso,
+      );
+    }
   }
 
   const dueAcks = ctx.db
@@ -2237,6 +2389,209 @@ describe("audit chain", () => {
 });
 
 ================================================================
+ FILE: backend/test/config-safety.test.ts
+ lines: 88
+================================================================
+import { afterEach, describe, expect, it } from "vitest";
+import { loadConfig } from "../src/config.js";
+import { crew, makeApp, type TestApp } from "./helpers.js";
+
+let current: TestApp | null = null;
+
+afterEach(async () => {
+  await current?.app.close();
+  current = null;
+});
+
+const customKeys = {
+  CREW_KEY: "crew-custom-key",
+  GROUND_KEY: "ground-custom-key",
+  DEVICE_KEY: "device-custom-key",
+};
+
+describe("configuration safety", () => {
+  it("refuses a non-loopback host while a demo key is in use", () => {
+    expect(() =>
+      loadConfig({ HOST: "0.0.0.0", DB_PATH: ":memory:" } as NodeJS.ProcessEnv),
+    ).toThrow(/Refusing to start/);
+    expect(() =>
+      loadConfig({
+        HOST: "0.0.0.0",
+        CREW_KEY: "crew-custom-key",
+        DB_PATH: ":memory:",
+      } as NodeJS.ProcessEnv),
+    ).toThrow(/Refusing to start/);
+  });
+
+  it("allows a non-loopback host once every key is replaced", () => {
+    const config = loadConfig({
+      HOST: "0.0.0.0",
+      DB_PATH: ":memory:",
+      ...customKeys,
+    } as NodeJS.ProcessEnv);
+    expect(config.host).toBe("0.0.0.0");
+  });
+
+  it("allows the demo keys on loopback", () => {
+    const config = loadConfig({ HOST: "localhost", DB_PATH: ":memory:" } as NodeJS.ProcessEnv);
+    expect(config.host).toBe("localhost");
+  });
+});
+
+describe("observation quality updates", () => {
+  it("does not erase a stored raw value when a later push omits it", async () => {
+    const test = await makeApp();
+    current = test;
+    const base = {
+      id: "raw-1",
+      crewId: "alex-morgan",
+      metric: "heart_rate",
+      value: 78,
+      unit: "bpm",
+      observedAt: new Date(test.now().getTime() - 5 * 60_000).toISOString(),
+      enteredAt: test.now().toISOString(),
+      lane: "manual",
+      method: "cuff",
+      context: "rest",
+      quality: "ok",
+      qualityReason: null,
+      environment: "mars_transit",
+      procedureVersion: "demo-procedures-1",
+    };
+
+    await test.app.inject({
+      method: "POST",
+      url: "/v1/sync/observations",
+      headers: crew,
+      payload: [{ ...base, rawValue: "78 (cuff reading)" }],
+    });
+    await test.app.inject({
+      method: "POST",
+      url: "/v1/sync/observations",
+      headers: crew,
+      payload: [{ ...base, quality: "stale" }],
+    });
+
+    const row = test.app.ctx.db
+      .prepare("SELECT raw_value, quality FROM observations WHERE id = 'raw-1'")
+      .get() as { raw_value: string | null; quality: string };
+    expect(row.raw_value).toBe("78 (cuff reading)");
+    // The stricter client flag is kept; only raw_value must be preserved.
+    expect(row.quality).toBe("stale");
+  });
+});
+
+================================================================
+ FILE: backend/test/crewid.test.ts
+ lines: 105
+================================================================
+import { afterEach, describe, expect, it } from "vitest";
+import { crew, ground, makeApp, packetBody, type TestApp } from "./helpers.js";
+
+let current: TestApp | null = null;
+
+afterEach(async () => {
+  await current?.app.close();
+  current = null;
+});
+
+describe("crewId scoping is required", () => {
+  it("rejects a crew packet read without crewId", async () => {
+    const test = await makeApp();
+    current = test;
+    await test.app.inject({
+      method: "POST",
+      url: "/v1/packets",
+      headers: crew,
+      payload: packetBody("c1"),
+    });
+
+    const response = await test.app.inject({
+      method: "GET",
+      url: "/v1/packets/c1",
+      headers: crew,
+    });
+    expect(response.statusCode).toBe(400);
+    expect((response.json() as { error: { code: string } }).error.code).toBe(
+      "CREW_ID_REQUIRED",
+    );
+
+    const scoped = await test.app.inject({
+      method: "GET",
+      url: "/v1/packets/c1?crewId=alex-morgan",
+      headers: crew,
+    });
+    expect(scoped.statusCode).toBe(200);
+  });
+
+  it("lets the ground key read a packet without crewId", async () => {
+    const test = await makeApp();
+    current = test;
+    await test.app.inject({
+      method: "POST",
+      url: "/v1/packets",
+      headers: crew,
+      payload: packetBody("c2"),
+    });
+    const response = await test.app.inject({
+      method: "GET",
+      url: "/v1/packets/c2",
+      headers: ground,
+    });
+    expect(response.statusCode).toBe(200);
+  });
+
+  it("rejects a crew sync pull without crewId", async () => {
+    const test = await makeApp();
+    current = test;
+    const response = await test.app.inject({
+      method: "GET",
+      url: "/v1/sync/observations?since=0",
+      headers: crew,
+    });
+    expect(response.statusCode).toBe(400);
+    expect((response.json() as { error: { code: string } }).error.code).toBe(
+      "CREW_ID_REQUIRED",
+    );
+  });
+
+  it("lets the ground key pull sync rows without crewId", async () => {
+    const test = await makeApp();
+    current = test;
+    await test.app.inject({
+      method: "POST",
+      url: "/v1/sync/observations",
+      headers: crew,
+      payload: [
+        {
+          id: "o1",
+          crewId: "alex-morgan",
+          metric: "heart_rate",
+          value: 70,
+          unit: "bpm",
+          observedAt: "2026-01-01T00:00:00.000Z",
+          enteredAt: "2026-01-01T00:00:00.000Z",
+          lane: "live",
+          method: "ppg_wrist",
+          context: "rest",
+          quality: "ok",
+          qualityReason: null,
+          environment: "mars_transit",
+          procedureVersion: "demo-procedures-1",
+        },
+      ],
+    });
+    const response = await test.app.inject({
+      method: "GET",
+      url: "/v1/sync/observations?since=0",
+      headers: ground,
+    });
+    expect(response.statusCode).toBe(200);
+    expect((response.json() as { items: unknown[] }).items).toHaveLength(1);
+  });
+});
+
+================================================================
  FILE: backend/test/helpers.ts
  lines: 80
 ================================================================
@@ -2475,8 +2830,160 @@ describe("packet ingest", () => {
 export type { FastifyInstance };
 
 ================================================================
+ FILE: backend/test/privacy-sync.test.ts
+ lines: 147
+================================================================
+import { afterEach, describe, expect, it } from "vitest";
+import { crew, makeApp, type TestApp } from "./helpers.js";
+
+let current: TestApp | null = null;
+
+afterEach(async () => {
+  await current?.app.close();
+  current = null;
+});
+
+function observation(id: string, metric: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id,
+    crewId: "alex-morgan",
+    metric,
+    value: metric === "heart_rate" ? 80 : 3,
+    unit: metric === "heart_rate" ? "bpm" : "/5",
+    observedAt: "2026-01-01T00:00:00.000Z",
+    enteredAt: "2026-01-01T00:00:00.000Z",
+    lane: "manual",
+    method: "self_report",
+    context: "rest",
+    quality: "ok",
+    qualityReason: null,
+    environment: "mars_transit",
+    procedureVersion: "demo-procedures-1",
+    ...overrides,
+  };
+}
+
+function checkIn(id: string) {
+  return {
+    id,
+    crewId: "alex-morgan",
+    observedAt: "2026-01-01T00:00:00.000Z",
+    enteredAt: "2026-01-01T00:00:00.000Z",
+    sleepMinutes: 420,
+    mood: 2,
+    stress: 4,
+    rested: 2,
+    connected: 3,
+    symptoms: [],
+    details: "private free text",
+  };
+}
+
+describe("private data in sync", () => {
+  it("drops private metrics by default and reports skipped", async () => {
+    const test = await makeApp();
+    current = test;
+    const response = await test.app.inject({
+      method: "POST",
+      url: "/v1/sync/observations",
+      headers: crew,
+      payload: [
+        observation("o-heart", "heart_rate"),
+        observation("o-mood", "mood"),
+        observation("o-stress", "stress"),
+        observation("o-rested", "rested"),
+        observation("o-connected", "connected"),
+      ],
+    });
+    const body = response.json() as { applied: number; skipped: number; includePrivate: boolean };
+    expect(body.applied).toBe(1);
+    expect(body.skipped).toBe(4);
+    expect(body.includePrivate).toBe(false);
+
+    const rows = test.app.ctx.db
+      .prepare("SELECT metric FROM observations ORDER BY metric")
+      .all() as Array<{ metric: string }>;
+    expect(rows.map((row) => row.metric)).toEqual(["heart_rate"]);
+  });
+
+  it("stores everything when includePrivate=true", async () => {
+    const test = await makeApp();
+    current = test;
+    const response = await test.app.inject({
+      method: "POST",
+      url: "/v1/sync/observations?includePrivate=true",
+      headers: crew,
+      payload: [observation("o-mood", "mood"), observation("o-heart", "heart_rate")],
+    });
+    const body = response.json() as { skipped: number };
+    expect(body.skipped).toBe(0);
+    const rows = test.app.ctx.db
+      .prepare("SELECT metric FROM observations ORDER BY metric")
+      .all() as Array<{ metric: string }>;
+    expect(rows.map((row) => row.metric)).toEqual(["heart_rate", "mood"]);
+  });
+
+  it("strips private check-in fields by default", async () => {
+    const test = await makeApp();
+    current = test;
+    const response = await test.app.inject({
+      method: "POST",
+      url: "/v1/sync/checkins",
+      headers: crew,
+      payload: [checkIn("c1")],
+    });
+    const body = response.json() as { applied: number; skipped: number };
+    expect(body.applied).toBe(1);
+    expect(body.skipped).toBe(5);
+
+    const row = test.app.ctx.db.prepare("SELECT json FROM checkins WHERE id = 'c1'").get() as {
+      json: string;
+    };
+    const stored = JSON.parse(row.json) as Record<string, unknown>;
+    expect(stored).not.toHaveProperty("mood");
+    expect(stored).not.toHaveProperty("stress");
+    expect(stored).not.toHaveProperty("rested");
+    expect(stored).not.toHaveProperty("connected");
+    expect(stored).not.toHaveProperty("details");
+    expect(stored.sleepMinutes).toBe(420);
+  });
+
+  it("keeps private check-in fields when opted in", async () => {
+    const test = await makeApp();
+    current = test;
+    await test.app.inject({
+      method: "POST",
+      url: "/v1/sync/checkins?includePrivate=true",
+      headers: crew,
+      payload: [checkIn("c2")],
+    });
+    const row = test.app.ctx.db.prepare("SELECT json FROM checkins WHERE id = 'c2'").get() as {
+      json: string;
+    };
+    const stored = JSON.parse(row.json) as Record<string, unknown>;
+    expect(stored.mood).toBe(2);
+    expect(stored.details).toBe("private free text");
+  });
+
+  it("records skipped counts in the audit log", async () => {
+    const test = await makeApp();
+    current = test;
+    await test.app.inject({
+      method: "POST",
+      url: "/v1/sync/observations",
+      headers: crew,
+      payload: [observation("o-mood", "mood"), observation("o-heart", "heart_rate")],
+    });
+    const row = test.app.ctx.db
+      .prepare("SELECT detail_json FROM audit_log WHERE action = 'sync.push' AND ref = 'observations'")
+      .get() as { detail_json: string };
+    expect(JSON.parse(row.detail_json)).toMatchObject({ applied: 1, skipped: 1 });
+  });
+});
+
+================================================================
  FILE: backend/test/scheduler.test.ts
- lines: 155
+ lines: 234
 ================================================================
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "../src/server.js";
@@ -2615,6 +3122,85 @@ describe("delivery and acknowledgement timing", () => {
     expect(secondAck).toBe(firstAck);
   });
 
+  it("holds an acknowledgement taken during blackout until the link returns", async () => {
+    const test = await delayedStation();
+    test.advance(1000);
+    runDueTransitions(test.app.ctx, test.now());
+
+    await test.app.inject({
+      method: "PUT",
+      url: "/v1/link",
+      headers: crew,
+      payload: { state: "blackout", environment: "station" },
+    });
+
+    const ack = await test.app.inject({
+      method: "POST",
+      url: "/v1/surgeon/packets/s1/ack",
+      headers: ground,
+    });
+    const held = (ack.json() as { packet: { ackAt: string | null; ackVisibleAt: string | null; state: string } })
+      .packet;
+    expect(held.ackAt).not.toBeNull();
+    expect(held.ackVisibleAt).toBeNull();
+    expect(held.state).toBe("delivered");
+
+    test.advance(10_000);
+    expect(runDueTransitions(test.app.ctx, test.now()).acknowledged).toEqual([]);
+    const stillHeld = await test.app.inject({
+      method: "GET",
+      url: "/v1/packets/s1?crewId=alex-morgan",
+      headers: crew,
+    });
+    expect((stillHeld.json() as { packet: { state: string } }).packet.state).toBe("delivered");
+
+    await test.app.inject({
+      method: "PUT",
+      url: "/v1/link",
+      headers: crew,
+      payload: { state: "delayed", environment: "station" },
+    });
+    expect(runDueTransitions(test.app.ctx, test.now()).acknowledged).toEqual([]);
+
+    test.advance(1000);
+    expect(runDueTransitions(test.app.ctx, test.now()).acknowledged).toEqual(["s1"]);
+    test.advance(5000);
+    expect(runDueTransitions(test.app.ctx, test.now()).acknowledged).toEqual([]);
+
+    const released = await test.app.inject({
+      method: "GET",
+      url: "/v1/packets/s1?crewId=alex-morgan",
+      headers: crew,
+    });
+    expect((released.json() as { packet: { state: string } }).packet.state).toBe("acknowledged");
+    const ackEvents = test.app.ctx.db
+      .prepare(
+        "SELECT COUNT(*) AS c FROM packet_events WHERE packet_id = 's1' AND state = 'acknowledged'",
+      )
+      .get() as { c: number };
+    expect(ackEvents.c).toBe(1);
+  });
+
+  it("still reports a scenario delay while in blackout", async () => {
+    const test = await delayedStation();
+    await test.app.inject({
+      method: "PUT",
+      url: "/v1/link",
+      headers: crew,
+      payload: { state: "blackout", environment: "station" },
+    });
+    const link = await test.app.inject({
+      method: "GET",
+      url: "/v1/link",
+      headers: crew,
+    });
+    const body = link.json() as {
+      link: { state: string; effectiveDelaySeconds: number };
+    };
+    expect(body.link.state).toBe("blackout");
+    expect(body.link.effectiveDelaySeconds).toBeGreaterThan(0);
+  });
+
   it("hides undelivered packets from the surgeon inbox", async () => {
     const test = await delayedStation();
     const inbox = await test.app.inject({
@@ -2631,6 +3217,249 @@ describe("delivery and acknowledgement timing", () => {
       headers: ground,
     });
     expect((later.json() as { packets: unknown[] }).packets).toHaveLength(1);
+  });
+});
+
+================================================================
+ FILE: backend/test/stream.test.ts
+ lines: 109
+================================================================
+import { afterEach, describe, expect, it } from "vitest";
+import { buildApp } from "../src/server.js";
+import { loadConfig } from "../src/config.js";
+import { scopeEvent } from "../src/routes/stream.js";
+import type { SseEvent } from "../src/context.js";
+import type { Role } from "../src/types.js";
+
+const packet = (crewId: string, isPrivate = false): SseEvent => ({
+  type: "packet.delivered",
+  data: { id: `p-${crewId}`, crewId, private: isPrivate },
+});
+
+const sample = (crewId: string): SseEvent => ({
+  type: "sample",
+  data: { id: `s-${crewId}`, crewId, metric: "heart_rate", value: 70 },
+});
+
+function visible(event: SseEvent, role: Role, crewId: string | null) {
+  return scopeEvent(event, role, crewId);
+}
+
+describe("stream scoping", () => {
+  it("shows a crew member only their own packets and samples", () => {
+    expect(visible(packet("alex-morgan", true), "crew", "alex-morgan")).not.toBeNull();
+    expect(visible(packet("alex-morgan"), "crew", "kenji-sato")).toBeNull();
+    expect(visible(sample("alex-morgan"), "crew", "alex-morgan")).not.toBeNull();
+    expect(visible(sample("alex-morgan"), "crew", "kenji-sato")).toBeNull();
+  });
+
+  it("shows the ground console packet events but no samples and no private packets", () => {
+    expect(visible(packet("alex-morgan", false), "ground", null)).not.toBeNull();
+    expect(visible(packet("alex-morgan", true), "ground", null)).toBeNull();
+    expect(visible(sample("alex-morgan"), "ground", null)).toBeNull();
+  });
+
+  it("sends link changes to both roles", () => {
+    const link: SseEvent = {
+      type: "link.changed",
+      data: { state: "live", environment: "station" },
+    };
+    expect(visible(link, "crew", "alex-morgan")).not.toBeNull();
+    expect(visible(link, "ground", null)).not.toBeNull();
+  });
+});
+
+describe("stream endpoint", () => {
+  afterEach(() => undefined);
+
+  it("requires crewId for the crew key and delivers only matching events", async () => {
+    const app = await buildApp(
+      loadConfig({ DB_PATH: ":memory:" } as NodeJS.ProcessEnv),
+      { scheduler: false },
+    );
+    await app.listen({ port: 4471, host: "127.0.0.1" });
+
+    const missing = await fetch("http://127.0.0.1:4471/v1/stream?token=crew-demo-key");
+    expect(missing.status).toBe(400);
+    await missing.body?.cancel();
+
+    const open = async (crewId: string) => {
+      const response = await fetch(
+        `http://127.0.0.1:4471/v1/stream?token=crew-demo-key&crewId=${crewId}`,
+      );
+      expect(response.status).toBe(200);
+      const reader = response.body!.getReader();
+      let text = "";
+      const loop = (async () => {
+        const decoder = new TextDecoder();
+        try {
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            text += decoder.decode(value);
+          }
+        } catch {
+          // cancelled at the end of the test
+        }
+      })();
+      return { text: () => text, stop: async () => reader.cancel(), loop };
+    };
+
+    const alex = await open("alex-morgan");
+    const kenji = await open("kenji-sato");
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    app.ctx.bus.emit(packet("alex-morgan", true));
+    app.ctx.bus.emit(packet("kenji-sato"));
+    app.ctx.bus.emit(sample("alex-morgan"));
+    app.ctx.bus.emit(sample("kenji-sato"));
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    await alex.stop();
+    await kenji.stop();
+    await alex.loop;
+    await kenji.loop;
+    await app.close();
+
+    const alexText = alex.text();
+    const kenjiText = kenji.text();
+    expect(alexText).toContain("p-alex-morgan");
+    expect(alexText).toContain("s-alex-morgan");
+    expect(alexText).not.toContain("p-kenji-sato");
+    expect(alexText).not.toContain("s-kenji-sato");
+    expect(kenjiText).toContain("p-kenji-sato");
+    expect(kenjiText).toContain("s-kenji-sato");
+    expect(kenjiText).not.toContain("p-alex-morgan");
+    expect(kenjiText).not.toContain("s-alex-morgan");
+  });
+});
+
+================================================================
+ FILE: backend/test/sync-paging.test.ts
+ lines: 124
+================================================================
+import { afterEach, describe, expect, it } from "vitest";
+import { crew, makeApp, type TestApp } from "./helpers.js";
+
+let current: TestApp | null = null;
+
+afterEach(async () => {
+  await current?.app.close();
+  current = null;
+});
+
+function seedObservations(test: TestApp, count: number) {
+  const insert = test.app.ctx.db.prepare(
+    `INSERT INTO observations (
+      id, crew_id, metric, value, unit, observed_at, entered_at, lane, method,
+      context, quality, quality_reason, environment, procedure_version, raw_value, updated_seq
+    ) VALUES (?, 'alex-morgan', 'heart_rate', 70, 'bpm', ?, ?, 'live', 'ppg_wrist',
+      'rest', 'ok', NULL, 'mars_transit', 'demo-procedures-1', NULL, ?)`,
+  );
+  const at = "2026-01-01T00:00:00.000Z";
+  test.app.ctx.db.transaction(() => {
+    for (let index = 1; index <= count; index += 1) {
+      insert.run(`obs-${String(index).padStart(5, "0")}`, at, at, index);
+    }
+    test.app.ctx.db.prepare("UPDATE sync_seq SET value = ? WHERE id = 1").run(count);
+  })();
+}
+
+describe("sync pull paging", () => {
+  it("retrieves 2500 rows completely across three pulls", async () => {
+    const test = await makeApp();
+    current = test;
+    seedObservations(test, 2500);
+    await test.app.inject({
+      method: "POST",
+      url: "/v1/sync/encounters",
+      headers: crew,
+      payload: [],
+    });
+
+    const seen = new Set<string>();
+    let since = 0;
+    let pulls = 0;
+    let hasMore = true;
+    while (hasMore) {
+      const response = await test.app.inject({
+        method: "GET",
+        url: `/v1/sync/observations?crewId=alex-morgan&since=${since}`,
+        headers: crew,
+      });
+      const body = response.json() as {
+        items: Array<{ id: string }>;
+        cursor: number;
+        hasMore: boolean;
+      };
+      pulls += 1;
+      expect(body.items.length).toBeGreaterThan(0);
+      expect(body.items.length).toBeLessThanOrEqual(1000);
+      for (const item of body.items) seen.add(item.id);
+      expect(body.cursor).toBeGreaterThan(since);
+      since = body.cursor;
+      hasMore = body.hasMore;
+      if (pulls > 5) throw new Error("paging did not terminate");
+    }
+
+    expect(pulls).toBe(3);
+    expect(seen.size).toBe(2500);
+    expect(since).toBe(2500);
+    expect(hasMore).toBe(false);
+  });
+
+  it("returns the last returned sequence, not the global counter", async () => {
+    const test = await makeApp();
+    current = test;
+    seedObservations(test, 3);
+    // A later unrelated row bumps the global sequence but is not returned here.
+    test.app.ctx.db
+      .prepare(
+        `INSERT INTO checkins (id, crew_id, json, updated_seq) VALUES ('c1', 'kenji-sato', '{}', 99)`,
+      )
+      .run();
+    test.app.ctx.db.prepare("UPDATE sync_seq SET value = 99 WHERE id = 1").run();
+
+    const response = await test.app.inject({
+      method: "GET",
+      url: "/v1/sync/observations?crewId=alex-morgan&since=0",
+      headers: crew,
+    });
+    const body = response.json() as { cursor: number; hasMore: boolean };
+    expect(body.cursor).toBe(3);
+    expect(body.hasMore).toBe(false);
+  });
+
+  it("pages check-ins and encounters the same way", async () => {
+    const test = await makeApp();
+    current = test;
+    const insert = test.app.ctx.db.prepare(
+      "INSERT INTO checkins (id, crew_id, json, updated_seq) VALUES (?, 'alex-morgan', '{}', ?)",
+    );
+    test.app.ctx.db.transaction(() => {
+      for (let index = 1; index <= 1005; index += 1) insert.run(`c-${index}`, index);
+      test.app.ctx.db.prepare("UPDATE sync_seq SET value = 1005 WHERE id = 1").run();
+    })();
+
+    const first = await test.app.inject({
+      method: "GET",
+      url: "/v1/sync/checkins?crewId=alex-morgan&since=0",
+      headers: crew,
+    });
+    const firstBody = first.json() as { items: unknown[]; cursor: number; hasMore: boolean };
+    expect(firstBody.items).toHaveLength(1000);
+    expect(firstBody.hasMore).toBe(true);
+    expect(firstBody.cursor).toBe(1000);
+
+    const second = await test.app.inject({
+      method: "GET",
+      url: `/v1/sync/checkins?crewId=alex-morgan&since=${firstBody.cursor}`,
+      headers: crew,
+    });
+    const secondBody = second.json() as { items: unknown[]; cursor: number; hasMore: boolean };
+    expect(secondBody.items).toHaveLength(5);
+    expect(secondBody.hasMore).toBe(false);
+    expect(secondBody.cursor).toBe(1005);
   });
 });
 
@@ -5404,7 +6233,7 @@ export default function Page() {
 
 ================================================================
  FILE: frontend/app/v2.css
- lines: 2211
+ lines: 2270
 ================================================================
 /* ============================================================
    CrewSignal v2 — link ribbon, status, trust, pathways, handoff
@@ -5574,6 +6403,45 @@ export default function Page() {
 }
 .ribbon-compression {
   color: var(--attention);
+}
+.surgeon-head-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.ground-login {
+  display: grid;
+  gap: 8px;
+  max-width: 420px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 18px;
+  background: var(--surface);
+  margin-bottom: 18px;
+}
+.ground-login h2 {
+  margin: 0;
+  font-size: 16px;
+}
+.ground-login p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.ground-login label {
+  font-size: 11px;
+  color: var(--muted);
+}
+.ground-login input {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--raised);
+  color: var(--text);
+  font: inherit;
+}
+.ground-login button {
+  justify-self: start;
 }
 .surgeon-server {
   font-size: 11px;
@@ -6687,6 +7555,26 @@ export default function Page() {
   font-size: 9px;
   color: var(--muted);
   margin-top: 3px;
+}
+.private-sync-toggle {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 11px;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  margin-top: 10px;
+}
+.private-sync-toggle input {
+  margin-top: 2px;
+}
+.private-sync-toggle em {
+  display: block;
+  font-style: normal;
+  font-size: 10px;
+  color: var(--muted);
+  opacity: 0.8;
 }
 .wellbeing-note {
   display: flex;
@@ -8003,7 +8891,7 @@ export function CrewNav({ crewId }: { crewId?: string }) {
 
 ================================================================
  FILE: frontend/components/health/dashboard-page.tsx
- lines: 659
+ lines: 666
 ================================================================
 "use client";
 
@@ -8051,6 +8939,8 @@ export function DashboardPage({ crewId }: { crewId: string }) {
   const enqueue = useStore((state) => state.enqueue);
   const notify = useStore((state) => state.notify);
   const environment = useStore((state) => state.environment);
+  const hydrated = useStore((state) => state.hydrated);
+  const pullForCrew = useStore((state) => state.pullForCrew);
 
   const simulation = useHealthSimulation(
     member?.restingHeartRate ?? 70,
@@ -8089,6 +8979,11 @@ export function DashboardPage({ crewId }: { crewId: string }) {
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  useEffect(() => {
+    if (!hydrated || !member) return;
+    void pullForCrew(crewId);
+  }, [crewId, hydrated, member, pullForCrew]);
 
   useEffect(() => {
     setIsDemo(new URLSearchParams(window.location.search).get("demo") === "1");
@@ -8529,7 +9424,7 @@ export function DashboardPage({ crewId }: { crewId: string }) {
               type="button"
               onClick={async () => {
                 remoteAdapter.current?.disconnect();
-                const adapter = new RemoteSensorAdapter();
+                const adapter = new RemoteSensorAdapter(crewId);
                 remoteAdapter.current = adapter;
                 try {
                   await adapter.connect();
@@ -12391,7 +13286,7 @@ export function LaneBadge({ lane }: { lane: "manual" | "live" | "replay" | "synt
 
 ================================================================
  FILE: frontend/components/health/surgeon-page.tsx
- lines: 216
+ lines: 293
 ================================================================
 "use client";
 
@@ -12401,6 +13296,7 @@ import { CheckCheck, Monitor } from "lucide-react";
 import { useStore } from "@/lib/store";
 import type { Handoff, OutboxItem } from "@/lib/types";
 import {
+  GROUND_SESSION_KEY,
   acknowledgeOnServer,
   connectStream,
   fetchSurgeonInbox,
@@ -12422,12 +13318,28 @@ export function SurgeonPage() {
 
   const [serverPackets, setServerPackets] = useState<ServerPacket[] | null>(null);
   const [streamNote, setStreamNote] = useState<string | null>(null);
+  const [groundKey, setGroundKey] = useState<string | null>(null);
+  const [keyInput, setKeyInput] = useState("");
+  const [loginError, setLoginError] = useState<string | null>(null);
+
+  // The ground credential is never in the bundle; it lives in this tab only.
+  useEffect(() => {
+    const stored = sessionStorage.getItem(GROUND_SESSION_KEY);
+    if (stored) setGroundKey(stored);
+  }, []);
+
+  const signOut = () => {
+    sessionStorage.removeItem(GROUND_SESSION_KEY);
+    setGroundKey(null);
+    setServerPackets(null);
+    setKeyInput("");
+  };
 
   useEffect(() => {
-    if (!serverConfigured) return;
+    if (!serverConfigured || !groundKey) return;
     let cancelled = false;
     const load = async () => {
-      const result = await fetchSurgeonInbox();
+      const result = await fetchSurgeonInbox(groundKey);
       if (cancelled) return;
       if (result.ok) {
         setServerPackets(result.packets);
@@ -12436,21 +13348,29 @@ export function SurgeonPage() {
       } else {
         setStreamNote(result.message);
         if (result.status === 0) setServerStatus(false);
+        if (result.status === 401 || result.status === 403) {
+          setLoginError("That key was not accepted. Ask for the ground key.");
+          sessionStorage.removeItem(GROUND_SESSION_KEY);
+          setGroundKey(null);
+        }
       }
     };
     void load();
-    const stop = connectStream({
-      onDelivered: () => void load(),
-      onAcknowledged: () => void load(),
-      onError: () => setStreamNote("Stream disconnected. Reconnecting and polling."),
-    });
+    const stop = connectStream(
+      {
+        onDelivered: () => void load(),
+        onAcknowledged: () => void load(),
+        onError: () => setStreamNote("Stream disconnected. Reconnecting and polling."),
+      },
+      { key: groundKey },
+    );
     const timer = window.setInterval(() => void load(), 5000);
     return () => {
       cancelled = true;
       stop();
       window.clearInterval(timer);
     };
-  }, [serverConfigured, setServerStatus]);
+  }, [groundKey, serverConfigured, setServerStatus]);
 
   const localReceived = outbox
     .filter((item) => item.state !== "queued")
@@ -12464,7 +13384,11 @@ export function SurgeonPage() {
       await acknowledge(item.id);
       return;
     }
-    const result = await acknowledgeOnServer(item.id);
+    if (!groundKey) {
+      setLoginError("Sign in with the ground key first.");
+      return;
+    }
+    const result = await acknowledgeOnServer(item.id, groundKey);
     if (!result.ok) {
       setStreamNote(result.message);
       if (result.status === 0) setServerStatus(false);
@@ -12488,11 +13412,57 @@ export function SurgeonPage() {
             hidden unless the astronaut shared them.
           </p>
         </div>
-        <Link className="secondary-button" href="/outbox">
-          Astronaut outbox
-        </Link>
+        <div className="surgeon-head-actions">
+          <Link className="secondary-button" href="/outbox">
+            Astronaut outbox
+          </Link>
+          {serverConfigured && groundKey && (
+            <button type="button" className="text-button" onClick={signOut}>
+              Sign out
+            </button>
+          )}
+        </div>
       </header>
 
+      {serverConfigured && !groundKey && (
+        <form
+          className="ground-login"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const key = keyInput.trim();
+            if (!key) return;
+            sessionStorage.setItem(GROUND_SESSION_KEY, key);
+            setGroundKey(key);
+            setLoginError(null);
+            setKeyInput("");
+          }}
+        >
+          <h2>Ground login</h2>
+          <p>
+            The ground key is not included in this page&apos;s code. Paste it for this
+            tab; it is kept in session storage and cleared when the tab closes.
+          </p>
+          <label htmlFor="ground-key">Ground key</label>
+          <input
+            id="ground-key"
+            type="password"
+            autoComplete="off"
+            value={keyInput}
+            onChange={(event) => setKeyInput(event.target.value)}
+          />
+          <button type="submit" className="primary-button">
+            Open console
+          </button>
+          {loginError && (
+            <p role="alert" className="field-error">
+              {loginError}
+            </p>
+          )}
+        </form>
+      )}
+
+      {(!serverConfigured || groundKey) && (
+        <>
       {serverConfigured && (
         <p className={`surgeon-server ${serverReachable ? "up" : "down"}`}>
           Ground server: {serverReachable ? "reachable" : "unreachable"}
@@ -12605,6 +13575,8 @@ export function SurgeonPage() {
             );
           })}
         </ul>
+      )}
+        </>
       )}
     </section>
   );
@@ -13114,7 +14086,7 @@ export { BodyMap, LineChart };
 
 ================================================================
  FILE: frontend/components/health/wellbeing-tile.tsx
- lines: 200
+ lines: 219
 ================================================================
 "use client";
 
@@ -13152,6 +14124,8 @@ export function WellbeingTile({
   const unlockPrivate = useStore((state) => state.unlockPrivate);
   const lockPrivate = useStore((state) => state.lockPrivate);
   const notify = useStore((state) => state.notify);
+  const privateSync = useStore((state) => state.privateSync[crewId] ?? false);
+  const setPrivateSyncConsent = useStore((state) => state.setPrivateSyncConsent);
   const [pin, setPinValue] = useState("");
   const [sheetOpen, setSheetOpen] = useState(false);
   const [error, setError] = useState("");
@@ -13278,6 +14252,23 @@ export function WellbeingTile({
         </p>
       </div>
 
+      <label className="private-sync-toggle">
+        <input
+          type="checkbox"
+          checked={privateSync}
+          onChange={(event) =>
+            void setPrivateSyncConsent(crewId, event.target.checked)
+          }
+        />
+        <span>
+          Also sync my private answers to the ground server
+          <em>
+            Off by default. Mood, stress, rested, connected and free text otherwise stay
+            on this device only.
+          </em>
+        </span>
+      </label>
+
       <button type="button" className="secondary-button" onClick={() => setSheetOpen(true)}>
         Request private support
       </button>
@@ -13319,7 +14310,7 @@ export function WellbeingTile({
 
 ================================================================
  FILE: frontend/components/shell/app-shell.tsx
- lines: 122
+ lines: 132
 ================================================================
 "use client";
 
@@ -13329,6 +14320,7 @@ import { Particles } from "@/components/health/particles";
 import { LinkRibbon } from "@/components/shell/link-ribbon";
 import { EmergencyBar } from "@/components/shell/emergency-bar";
 import { useStore } from "@/lib/store";
+import { missionConfig } from "@/lib/mission-config";
 import {
   apiConfigured,
   connectStream,
@@ -13349,6 +14341,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const applyServerPacket = useStore((state) => state.applyServerPacket);
   const pathname = usePathname();
   const emergencyMode = pathname.startsWith("/emergency");
+  const routeCrewId = pathname.match(/^\/crew\/([^/]+)/)?.[1];
 
   useEffect(() => {
     void hydrate();
@@ -13373,17 +14366,25 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     };
     void check();
     const timer = window.setInterval(() => void check(), 15_000);
-    const stopStream = connectStream({
-      onDelivered: (packet) => void applyServerPacket(packet),
-      onAcknowledged: (packet) => void applyServerPacket(packet),
-      onError: () => setServerStatus(false),
-    });
+    const stopStream = connectStream(
+      {
+        onDelivered: (packet) => void applyServerPacket(packet),
+        onAcknowledged: (packet) => void applyServerPacket(packet),
+        onError: () => setServerStatus(false),
+      },
+      {
+        crewId:
+          routeCrewId ??
+          useStore.getState().outbox[0]?.crewId ??
+          missionConfig.crew[0]?.id,
+      },
+    );
     return () => {
       cancelled = true;
       window.clearInterval(timer);
       stopStream();
     };
-  }, [applyServerPacket, setServerStatus]);
+  }, [applyServerPacket, routeCrewId, setServerStatus]);
 
   useEffect(() => {
     if (!toast) return;
@@ -15356,8 +16357,56 @@ export function observationsFromCheckIn(checkIn: CheckIn): Observation[] {
 }
 
 ================================================================
+ FILE: frontend/lib/outbox/ground-key.test.ts
+ lines: 43
+================================================================
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+import { describe, expect, it } from "vitest";
+
+/**
+ * The ground credential must never be compiled into the crew bundle. This test
+ * walks the app source and fails if the key is referenced from client code.
+ */
+function sourceFiles(dir: string, found: string[] = []): string[] {
+  for (const entry of readdirSync(dir)) {
+    if (["node_modules", ".next", "public"].includes(entry)) continue;
+    const path = join(dir, entry);
+    const stat = statSync(path);
+    if (stat.isDirectory()) {
+      sourceFiles(path, found);
+      continue;
+    }
+    if (/\.(ts|tsx|js|jsx|mjs)$/.test(entry)) found.push(path);
+  }
+  return found;
+}
+
+describe("ground credential exposure", () => {
+  it("does not reference a public ground key anywhere in the app source", () => {
+    const root = process.cwd();
+    // Only the directories that are bundled for the browser. The e2e harness
+    // lives in e2e/ and is never shipped to a client.
+    const bundled = ["app", "components", "lib"].flatMap((dir) =>
+      sourceFiles(join(root, dir)),
+    );
+    const hits = bundled
+      .filter((path) => !path.endsWith("ground-key.test.ts"))
+      .filter((path) => {
+        const text = readFileSync(path, "utf8");
+        return (
+          text.includes("NEXT_PUBLIC_GROUND_KEY") ||
+          text.includes("ground-demo-key")
+        );
+      })
+      .map((path) => relative(root, path));
+    expect(hits).toEqual([]);
+  });
+});
+
+================================================================
  FILE: frontend/lib/outbox/http-transport.ts
- lines: 248
+ lines: 263
 ================================================================
 import type {
   EnvironmentKey,
@@ -15376,7 +16425,9 @@ export const apiBase = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/+$/, "
 export const apiConfigured = apiBase.length > 0;
 
 const crewKey = process.env.NEXT_PUBLIC_CREW_KEY ?? "";
-const groundKey = process.env.NEXT_PUBLIC_GROUND_KEY ?? "";
+
+/** The ground key is never bundled: the console asks for it and keeps it in sessionStorage. */
+export const GROUND_SESSION_KEY = "crewsignal-ground-key";
 
 export type ServerPacket = {
   id: string;
@@ -15512,7 +16563,7 @@ export async function fetchPacket(id: string, crewId: string) {
   );
 }
 
-export async function fetchSurgeonInbox() {
+export async function fetchSurgeonInbox(groundKey: string) {
   return request<{ packets: ServerPacket[]; serverTime: string }>(
     "/v1/surgeon/inbox",
     {},
@@ -15520,7 +16571,7 @@ export async function fetchSurgeonInbox() {
   );
 }
 
-export async function acknowledgeOnServer(id: string) {
+export async function acknowledgeOnServer(id: string, groundKey: string) {
   return request<{ packet: ServerPacket; serverTime: string }>(
     `/v1/surgeon/packets/${encodeURIComponent(id)}/ack`,
     { method: "POST", body: "{}" },
@@ -15537,10 +16588,17 @@ export type StreamHandlers = {
 };
 
 /** Same-origin replay of the server stream. Returns a disconnect function. */
-export function connectStream(handlers: StreamHandlers): () => void {
+export function connectStream(
+  handlers: StreamHandlers,
+  options: { crewId?: string; key?: string } = {},
+): () => void {
   if (!apiConfigured || typeof EventSource === "undefined") return () => undefined;
+  const key = options.key ?? crewKey;
+  const crewQuery = options.crewId
+    ? `&crewId=${encodeURIComponent(options.crewId)}`
+    : "";
   const source = new EventSource(
-    `${apiBase}/v1/stream?token=${encodeURIComponent(crewKey)}`,
+    `${apiBase}/v1/stream?token=${encodeURIComponent(key)}${crewQuery}`,
   );
   const parse = (event: MessageEvent) => JSON.parse(event.data) as unknown;
 
@@ -15571,19 +16629,25 @@ export class RemoteSensorAdapter implements SensorAdapter {
   private sampleListeners = new Set<(sample: Observation) => void>();
   private qualityListeners = new Set<(quality: Observation["quality"]) => void>();
 
+  constructor(private crewId: string) {}
+
   async connect() {
     if (!apiConfigured) {
       throw new Error("Set NEXT_PUBLIC_API_URL to use the remote sensor.");
     }
-    this.disconnectStream = connectStream({
-      onSample: (sample) => {
-        for (const listener of this.sampleListeners) listener(sample);
-        for (const listener of this.qualityListeners) listener(sample.quality);
+    this.disconnectStream = connectStream(
+      {
+        onSample: (sample) => {
+          if (sample.crewId !== this.crewId) return;
+          for (const listener of this.sampleListeners) listener(sample);
+          for (const listener of this.qualityListeners) listener(sample.quality);
+        },
+        onError: () => {
+          for (const listener of this.qualityListeners) listener("no_contact");
+        },
       },
-      onError: () => {
-        for (const listener of this.qualityListeners) listener("no_contact");
-      },
-    });
+      { crewId: this.crewId },
+    );
   }
 
   disconnect() {
@@ -16868,6 +17932,83 @@ export const syncedRepository =
   repository instanceof SyncedRepository ? repository : null;
 
 ================================================================
+ FILE: frontend/lib/repo/privacy.test.ts
+ lines: 72
+================================================================
+import { describe, expect, it } from "vitest";
+import { sendableObservations, stripPrivateCheckIn } from "@/lib/repo/synced-repository";
+import type { CheckIn, Observation } from "@/lib/types";
+
+function observation(id: string, metric: Observation["metric"]): Observation {
+  return {
+    id,
+    crewId: "alex-morgan",
+    metric,
+    value: 3,
+    unit: "/5",
+    observedAt: "2026-01-01T00:00:00.000Z",
+    enteredAt: "2026-01-01T00:00:00.000Z",
+    lane: "manual",
+    method: "self_report",
+    context: "rest",
+    quality: "ok",
+    qualityReason: null,
+    environment: "mars_transit",
+    procedureVersion: "demo-procedures-1",
+  };
+}
+
+const checkIn: CheckIn = {
+  id: "c1",
+  crewId: "alex-morgan",
+  observedAt: "2026-01-01T00:00:00.000Z",
+  enteredAt: "2026-01-01T00:00:00.000Z",
+  sleepMinutes: 420,
+  mood: 2,
+  stress: 4,
+  rested: 2,
+  connected: 3,
+  symptoms: [],
+  details: "private free text",
+};
+
+describe("frontend private sync filter", () => {
+  it("never sends private metrics without consent", () => {
+    const outbound = sendableObservations(
+      [
+        observation("heart", "heart_rate"),
+        observation("mood", "mood"),
+        observation("stress", "stress"),
+        observation("rested", "rested"),
+        observation("connected", "connected"),
+      ],
+      {},
+    );
+    expect(outbound.map((item) => item.metric)).toEqual(["heart_rate"]);
+  });
+
+  it("sends private metrics for a crew member who opted in", () => {
+    const outbound = sendableObservations(
+      [observation("heart", "heart_rate"), observation("mood", "mood")],
+      { "alex-morgan": true },
+    );
+    expect(outbound.map((item) => item.metric)).toEqual(["heart_rate", "mood"]);
+  });
+
+  it("strips private check-in fields and keeps sleep", () => {
+    const stripped = stripPrivateCheckIn(checkIn);
+    expect(stripped).not.toHaveProperty("mood");
+    expect(stripped).not.toHaveProperty("stress");
+    expect(stripped).not.toHaveProperty("rested");
+    expect(stripped).not.toHaveProperty("connected");
+    expect(stripped).not.toHaveProperty("details");
+    expect(stripped.sleepMinutes).toBe(420);
+    // The local copy passed in is untouched.
+    expect(checkIn.mood).toBe(2);
+  });
+});
+
+================================================================
  FILE: frontend/lib/repo/repository.ts
  lines: 222
 ================================================================
@@ -17096,7 +18237,7 @@ export const repository: Repository = new LocalRepository();
 
 ================================================================
  FILE: frontend/lib/repo/synced-repository.ts
- lines: 152
+ lines: 191
 ================================================================
 import type {
   CheckIn,
@@ -17108,7 +18249,26 @@ import type { Repository } from "@/lib/repo/repository";
 import { apiConfigured } from "@/lib/outbox/http-transport";
 
 const SYNC_CURSOR_KEY = "syncCursor";
+const PRIVATE_SYNC_KEY = "privateSync";
 const BATCH = 200;
+const PRIVATE_METRICS = new Set(["mood", "stress", "rested", "connected"]);
+const PRIVATE_CHECKIN_FIELDS = ["mood", "stress", "rested", "connected", "details"] as const;
+
+/** Exported so the privacy rule is testable without a network. */
+export function sendableObservations(
+  items: Observation[],
+  consent: Record<string, boolean>,
+): Observation[] {
+  return items.filter(
+    (item) => consent[item.crewId] === true || !PRIVATE_METRICS.has(item.metric),
+  );
+}
+
+export function stripPrivateCheckIn(checkIn: CheckIn): CheckIn {
+  const stripped = { ...checkIn } as Record<string, unknown>;
+  for (const field of PRIVATE_CHECKIN_FIELDS) delete stripped[field];
+  return stripped as unknown as CheckIn;
+}
 
 type Cursor = Record<string, number>;
 
@@ -17153,17 +18313,30 @@ export class SyncedRepository implements Repository {
     return this.local.setConfig<T>(key, value);
   }
 
+  private async privateConsent(): Promise<Record<string, boolean>> {
+    return (await this.local.getConfig<Record<string, boolean>>(PRIVATE_SYNC_KEY)) ?? {};
+  }
+
   async putObservations(items: Observation[]) {
     await this.local.putObservations(items);
     if (!apiConfigured) return;
-    this.pendingObservations.push(...items);
+    const consent = await this.privateConsent();
+    // Private answers stay on this device unless that crew member opted in.
+    const sendable = sendableObservations(items, consent);
+    if (sendable.length === 0) return;
+    this.pendingObservations.push(...sendable);
     void this.flush();
   }
 
   async putCheckIn(checkIn: CheckIn) {
     await this.local.putCheckIn(checkIn);
     if (!apiConfigured) return;
-    this.pendingCheckIns.push(checkIn);
+    const consent = await this.privateConsent();
+    let outbound: CheckIn = checkIn;
+    if (consent[checkIn.crewId] !== true) {
+      outbound = stripPrivateCheckIn(checkIn);
+    }
+    this.pendingCheckIns.push(outbound);
     void this.flush();
   }
 
@@ -17209,8 +18382,8 @@ export class SyncedRepository implements Repository {
     }
   }
 
-  /** Pull everything newer than the stored cursor. Returns how many rows landed. */
-  async pull(): Promise<number> {
+  /** Pull everything newer than the stored cursor for one crew member. */
+  async pull(crewId: string): Promise<number> {
     if (!apiConfigured) return 0;
     const cursor = (await this.getConfig<Cursor>(SYNC_CURSOR_KEY)) ?? {
       observations: 0,
@@ -17219,31 +18392,38 @@ export class SyncedRepository implements Repository {
     };
     let landed = 0;
     for (const collection of ["observations", "checkins", "encounters"] as const) {
-      try {
-        const response = await fetch(
-          `${(process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/+$/, "")}/v1/sync/${collection}?since=${cursor[collection] ?? 0}`,
-          {
-            headers: {
-              authorization: `Bearer ${process.env.NEXT_PUBLIC_CREW_KEY ?? ""}`,
+      let since = cursor[collection] ?? 0;
+      for (;;) {
+        try {
+          const response = await fetch(
+            `${(process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/+$/, "")}/v1/sync/${collection}?since=${since}&crewId=${encodeURIComponent(crewId)}`,
+            {
+              headers: {
+                authorization: `Bearer ${process.env.NEXT_PUBLIC_CREW_KEY ?? ""}`,
+              },
             },
-          },
-        );
-        if (!response.ok) continue;
-        const body = (await response.json()) as {
-          items: Array<Observation | CheckIn | Encounter>;
-          cursor: number;
-        };
-        if (collection === "observations") {
-          await this.local.putObservations(body.items as Observation[]);
-        } else if (collection === "checkins") {
-          for (const item of body.items as CheckIn[]) await this.local.putCheckIn(item);
-        } else {
-          for (const item of body.items as Encounter[]) await this.local.putEncounter(item);
+          );
+          if (!response.ok) break;
+          const body = (await response.json()) as {
+            items: Array<Observation | CheckIn | Encounter>;
+            cursor: number;
+            hasMore: boolean;
+          };
+          if (collection === "observations") {
+            await this.local.putObservations(body.items as Observation[]);
+          } else if (collection === "checkins") {
+            for (const item of body.items as CheckIn[]) await this.local.putCheckIn(item);
+          } else {
+            for (const item of body.items as Encounter[]) await this.local.putEncounter(item);
+          }
+          landed += body.items.length;
+          since = body.cursor;
+          cursor[collection] = since;
+          if (!body.hasMore) break;
+        } catch {
+          // Offline: keep the cursor and try again next start.
+          break;
         }
-        cursor[collection] = body.cursor;
-        landed += body.items.length;
-      } catch {
-        // Offline: keep the cursor and try again next start.
       }
     }
     await this.setConfig(SYNC_CURSOR_KEY, cursor);
@@ -17623,7 +18803,7 @@ export function summariseStatus(
 
 ================================================================
  FILE: frontend/lib/store.ts
- lines: 386
+ lines: 401
 ================================================================
 "use client";
 
@@ -17671,6 +18851,7 @@ type State = {
   serverConfigured: boolean;
   serverReachable: boolean | null;
   serverDelayScale: number;
+  privateSync: Record<string, boolean>;
 };
 
 type Actions = {
@@ -17694,6 +18875,8 @@ type Actions = {
   lockPrivate: () => void;
   notify: (message: string, tone?: Toast["tone"]) => void;
   clearToast: () => void;
+  setPrivateSyncConsent: (crewId: string, allowed: boolean) => Promise<void>;
+  pullForCrew: (crewId: string) => Promise<void>;
   setServerStatus: (reachable: boolean, delayScale?: number) => void;
   applyServerPacket: (packet: ServerPacket) => Promise<void>;
   reconcileOutbox: (crewId: string) => Promise<void>;
@@ -17746,6 +18929,7 @@ export const useStore = create<State & Actions>((set, get) => ({
   serverConfigured: apiConfigured,
   serverReachable: apiConfigured ? null : false,
   serverDelayScale: 1,
+  privateSync: {},
 
   hydrate: async (repo = repository) => {
     if (get().hydrated) return;
@@ -17762,6 +18946,7 @@ export const useStore = create<State & Actions>((set, get) => ({
           ),
         ]);
       const pinHash = await repo.getConfig<string>("pin");
+      const privateSync = (await repo.getConfig<Record<string, boolean>>("privateSync")) ?? {};
       if (observations.length === 0) {
         observations = seedObservations();
         await repo.putObservations(observations);
@@ -17775,27 +18960,11 @@ export const useStore = create<State & Actions>((set, get) => ({
         environment: prefs?.environment ?? missionConfig.environment,
         link: prefs?.link ?? "live",
         pinHash: pinHash ?? null,
+        privateSync,
         hydrated: true,
       });
 
-      if (syncedRepository) {
-        void syncedRepository
-          .pull()
-          .then(async (count) => {
-            if (count === 0) return;
-            const [nextObservations, nextCheckIns, nextEncounters] = await Promise.all([
-              repo.listObservations(),
-              repo.listCheckIns(),
-              repo.listEncounters(),
-            ]);
-            set({
-              observations: nextObservations,
-              checkIns: nextCheckIns,
-              encounters: nextEncounters,
-            });
-          })
-          .catch(() => undefined);
-      }
+
     } catch {
       set({
         hydrated: true,
@@ -17980,6 +19149,32 @@ export const useStore = create<State & Actions>((set, get) => ({
 
   notify: (message, tone = "neutral") => set({ toast: { message, tone } }),
   clearToast: () => set({ toast: null }),
+
+  pullForCrew: async (crewId) => {
+    if (!syncedRepository) return;
+    try {
+      const count = await syncedRepository.pull(crewId);
+      if (count === 0) return;
+      const [nextObservations, nextCheckIns, nextEncounters] = await Promise.all([
+        repository.listObservations(),
+        repository.listCheckIns(),
+        repository.listEncounters(),
+      ]);
+      set({
+        observations: nextObservations,
+        checkIns: nextCheckIns,
+        encounters: nextEncounters,
+      });
+    } catch {
+      // Offline: the cursor is unchanged and the next mount retries.
+    }
+  },
+
+  setPrivateSyncConsent: async (crewId, allowed) => {
+    const next = { ...get().privateSync, [crewId]: allowed };
+    set({ privateSync: next });
+    await repository.setConfig("privateSync", next);
+  },
 
   setServerStatus: (reachable, delayScale) =>
     set({
@@ -18484,7 +19679,7 @@ export default nextConfig;
 
 ================================================================
  FILE: frontend/package.json
- lines: 34
+ lines: 36
 ================================================================
 {
   "name": "crewsignal",
@@ -18495,7 +19690,8 @@ export default nextConfig;
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "e2e:browser": "node e2e/demo-check.mjs"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",
@@ -18514,6 +19710,7 @@ export default nextConfig;
     "@types/node": "^24",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "playwright-core": "^1.65.1",
     "postcss": "^8.5",
     "tailwindcss": "^4.3.3",
     "typescript": "5.7.3",
