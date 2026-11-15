@@ -178,8 +178,15 @@ In `frontend/.env.local`:
 ```
 NEXT_PUBLIC_API_URL=http://localhost:4000
 NEXT_PUBLIC_CREW_KEY=crew-demo-key
-NEXT_PUBLIC_GROUND_KEY=ground-demo-key
 ```
+
+There is deliberately no ground key in the frontend environment. The crew
+bundle carries only the crew credential; the ground key never ships to the
+browser. Open `/surgeon`, paste the ground key (`ground-demo-key` by default)
+into the Ground login form, and it is kept in `sessionStorage` for that tab.
+Signing out clears it. This is a demo login for a shared key, not real
+authentication: there is no per-user account, no password hashing and no
+session server-side.
 
 Then run the frontend on `http://localhost:3000` and the backend on
 `http://localhost:4000`. Both must stay on plain `http://localhost`: a browser
@@ -195,5 +202,6 @@ all existing tests pass unchanged.
 This is demo software. The keys are shared secrets checked by string equality,
 there is no TLS, no per-user identity, and no claim of medical-data security or
 HIPAA/GDPR compliance. Private mood, stress, rested and connected fields are
-stripped server-side as defense in depth, but the transport is plain HTTP in the
-demo.
+stripped server-side as defense in depth, and are not synced at all unless the
+crew member opts in. The transport is plain HTTP in the demo, and the `/surgeon`
+"login" is only a prompt that holds the shared ground key in sessionStorage.

@@ -15,7 +15,9 @@ export const apiBase = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/+$/, "
 export const apiConfigured = apiBase.length > 0;
 
 const crewKey = process.env.NEXT_PUBLIC_CREW_KEY ?? "";
-const groundKey = process.env.NEXT_PUBLIC_GROUND_KEY ?? "";
+
+/** The ground key is never bundled: the console asks for it and keeps it in sessionStorage. */
+export const GROUND_SESSION_KEY = "crewsignal-ground-key";
 
 export type ServerPacket = {
   id: string;
@@ -151,7 +153,7 @@ export async function fetchPacket(id: string, crewId: string) {
   );
 }
 
-export async function fetchSurgeonInbox() {
+export async function fetchSurgeonInbox(groundKey: string) {
   return request<{ packets: ServerPacket[]; serverTime: string }>(
     "/v1/surgeon/inbox",
     {},
@@ -159,7 +161,7 @@ export async function fetchSurgeonInbox() {
   );
 }
 
-export async function acknowledgeOnServer(id: string) {
+export async function acknowledgeOnServer(id: string, groundKey: string) {
   return request<{ packet: ServerPacket; serverTime: string }>(
     `/v1/surgeon/packets/${encodeURIComponent(id)}/ack`,
     { method: "POST", body: "{}" },
