@@ -91,27 +91,27 @@ function DashboardPage({
       `Mood: ${checkIn.mood ? moodLabel(checkIn.mood) : "Not entered yet"}`,
       `Sleep: ${formatSleep(checkIn)}`,
     ],
-    Heart: [
-      isUsable ? `${vitals.heartRate} bpm` : "No valid reading",
-    ],
+    Heart: [isUsable ? `${vitals.heartRate} bpm` : "No valid reading"],
     Arm: [
       isUsable
         ? `${vitals.systolic} / ${vitals.diastolic} mmHg`
         : "No valid reading",
     ],
     Skin: [
-      isUsable
-        ? `${vitals.skinTemperature.toFixed(1)} °C`
-        : "No valid reading",
+      isUsable ? `${vitals.skinTemperature.toFixed(1)} °C` : "No valid reading",
     ],
     Abdomen: [
-      checkIn.bloodSugar
-        ? `${checkIn.bloodSugar} mg/dL`
-        : "Not entered yet",
+      checkIn.bloodSugar ? `${checkIn.bloodSugar} mg/dL` : "Not entered yet",
     ],
-    Legs: [
-      isUsable ? `${vitals.motion.toFixed(2)} g` : "No valid reading",
-    ],
+    Legs: [isUsable ? `${vitals.motion.toFixed(2)} g` : "No valid reading"],
+  };
+  const areaListLabels: Partial<Record<BodyArea, string>> = {
+    Head: "Mood/Sleep",
+    Heart: "Heart rate",
+    Arm: "Blood Pressure",
+    Skin: "Skin temperature",
+    Abdomen: "Blood Sugar",
+    Legs: "Motion/Activity",
   };
   const currentHeartValues = histories.heartRate.filter(
     (value): value is number => value !== null,
@@ -194,7 +194,8 @@ function DashboardPage({
 
           <div className="welcome-actions">
             <button className="secondary-button" onClick={onBeginSensorCheck}>
-              <Activity /> {checking ? "Checking sensors…" : "Check all sensors"}
+              <Activity />{" "}
+              {checking ? "Checking sensors…" : "Check all sensors"}
             </button>
             <button className="primary-button" onClick={onOpenForm}>
               Fill today&apos;s form <ChevronRight />
@@ -205,7 +206,9 @@ function DashboardPage({
         <div className="task-row">
           {["Sensor check", "Mood", "Sleep", "Symptoms"].map((task, index) => (
             <span className="task-chip" key={task}>
-              <span className={index === 0 || checkIn.enteredAt ? "task-check" : ""}>
+              <span
+                className={index === 0 || checkIn.enteredAt ? "task-check" : ""}
+              >
                 {index === 0 || checkIn.enteredAt ? (
                   <Check size={13} />
                 ) : (
@@ -280,7 +283,7 @@ function DashboardPage({
                   className={selected === area ? "selected" : ""}
                   onClick={() => onSelectArea(area)}
                 >
-                  {area === "Skin" ? "Skin / torso" : area}
+                  {areaListLabels[area] ?? area}
                 </button>
               ))}
             </div>
@@ -304,7 +307,8 @@ function DashboardPage({
               <h2>Today</h2>
             </div>
             <span className="date-pill">
-              <Clock3 /> {time.toLocaleDateString("en-GB", { dateStyle: "medium" })}
+              <Clock3 />{" "}
+              {time.toLocaleDateString("en-GB", { dateStyle: "medium" })}
             </span>
           </div>
 
@@ -350,7 +354,10 @@ function DashboardPage({
                       ? Utensils
                       : Check;
                 return (
-                  <span className="timeline-event" key={`${event.label}-${index}`}>
+                  <span
+                    className="timeline-event"
+                    key={`${event.label}-${index}`}
+                  >
                     <EventIcon size={14} />
                     <b>{event.label}</b>
                     <time>{event.time ? `${event.time} UTC` : ""}</time>
