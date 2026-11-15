@@ -44,6 +44,8 @@ export function DashboardPage({ crewId }: { crewId: string }) {
   const enqueue = useStore((state) => state.enqueue);
   const notify = useStore((state) => state.notify);
   const environment = useStore((state) => state.environment);
+  const hydrated = useStore((state) => state.hydrated);
+  const pullForCrew = useStore((state) => state.pullForCrew);
 
   const simulation = useHealthSimulation(
     member?.restingHeartRate ?? 70,
@@ -82,6 +84,11 @@ export function DashboardPage({ crewId }: { crewId: string }) {
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  useEffect(() => {
+    if (!hydrated || !member) return;
+    void pullForCrew(crewId);
+  }, [crewId, hydrated, member, pullForCrew]);
 
   useEffect(() => {
     setIsDemo(new URLSearchParams(window.location.search).get("demo") === "1");

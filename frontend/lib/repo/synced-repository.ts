@@ -141,8 +141,8 @@ export class SyncedRepository implements Repository {
     }
   }
 
-  /** Pull everything newer than the stored cursor. Returns how many rows landed. */
-  async pull(): Promise<number> {
+  /** Pull everything newer than the stored cursor for one crew member. */
+  async pull(crewId: string): Promise<number> {
     if (!apiConfigured) return 0;
     const cursor = (await this.getConfig<Cursor>(SYNC_CURSOR_KEY)) ?? {
       observations: 0,
@@ -155,7 +155,7 @@ export class SyncedRepository implements Repository {
       for (;;) {
         try {
           const response = await fetch(
-            `${(process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/+$/, "")}/v1/sync/${collection}?since=${since}`,
+            `${(process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/+$/, "")}/v1/sync/${collection}?since=${since}&crewId=${encodeURIComponent(crewId)}`,
             {
               headers: {
                 authorization: `Bearer ${process.env.NEXT_PUBLIC_CREW_KEY ?? ""}`,

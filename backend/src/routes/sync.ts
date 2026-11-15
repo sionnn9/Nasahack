@@ -188,13 +188,20 @@ export function registerSync(app: FastifyInstance, ctx: Ctx) {
   app.get<{ Params: CollectionParams; Querystring: { since?: string; crewId?: string } }>(
     "/v1/sync/:collection",
     async (request) => {
-      const role = requireRole(ctx, request, ["crew"]);
+      const role = requireRole(ctx, request, ["crew", "ground"]);
       const collection = assertCollection(request.params.collection);
       const since = Number(request.query.since ?? 0);
       if (!Number.isFinite(since) || since < 0) {
         throw new ApiError(400, "BAD_CURSOR", "since must be a non-negative number.");
       }
       const crewId = request.query.crewId;
+      if (role === "crew" && !crewId) {
+        throw new ApiError(
+          400,
+          "CREW_ID_REQUIRED",
+          "Pass ?crewId= so the server can scope this pull to you.",
+        );
+      }
 
       // The cursor is the last row actually returned, never the global counter:
       // otherwise a page cut short would silently skip rows.
