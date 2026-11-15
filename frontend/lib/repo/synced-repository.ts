@@ -151,31 +151,38 @@ export class SyncedRepository implements Repository {
     };
     let landed = 0;
     for (const collection of ["observations", "checkins", "encounters"] as const) {
-      try {
-        const response = await fetch(
-          `${(process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/+$/, "")}/v1/sync/${collection}?since=${cursor[collection] ?? 0}`,
-          {
-            headers: {
-              authorization: `Bearer ${process.env.NEXT_PUBLIC_CREW_KEY ?? ""}`,
+      let since = cursor[collection] ?? 0;
+      for (;;) {
+        try {
+          const response = await fetch(
+            `${(process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/+$/, "")}/v1/sync/${collection}?since=${since}`,
+            {
+              headers: {
+                authorization: `Bearer ${process.env.NEXT_PUBLIC_CREW_KEY ?? ""}`,
+              },
             },
-          },
-        );
-        if (!response.ok) continue;
-        const body = (await response.json()) as {
-          items: Array<Observation | CheckIn | Encounter>;
-          cursor: number;
-        };
-        if (collection === "observations") {
-          await this.local.putObservations(body.items as Observation[]);
-        } else if (collection === "checkins") {
-          for (const item of body.items as CheckIn[]) await this.local.putCheckIn(item);
-        } else {
-          for (const item of body.items as Encounter[]) await this.local.putEncounter(item);
+          );
+          if (!response.ok) break;
+          const body = (await response.json()) as {
+            items: Array<Observation | CheckIn | Encounter>;
+            cursor: number;
+            hasMore: boolean;
+          };
+          if (collection === "observations") {
+            await this.local.putObservations(body.items as Observation[]);
+          } else if (collection === "checkins") {
+            for (const item of body.items as CheckIn[]) await this.local.putCheckIn(item);
+          } else {
+            for (const item of body.items as Encounter[]) await this.local.putEncounter(item);
+          }
+          landed += body.items.length;
+          since = body.cursor;
+          cursor[collection] = since;
+          if (!body.hasMore) break;
+        } catch {
+          // Offline: keep the cursor and try again next start.
+          break;
         }
-        cursor[collection] = body.cursor;
-        landed += body.items.length;
-      } catch {
-        // Offline: keep the cursor and try again next start.
       }
     }
     await this.setConfig(SYNC_CURSOR_KEY, cursor);

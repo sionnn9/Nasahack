@@ -196,21 +196,28 @@ export function registerSync(app: FastifyInstance, ctx: Ctx) {
       }
       const crewId = request.query.crewId;
 
+      // The cursor is the last row actually returned, never the global counter:
+      // otherwise a page cut short would silently skip rows.
+      const limit = 1000;
+
       if (collection === "observations") {
         const rows = ctx.db
           .prepare(
             `SELECT * FROM observations
              WHERE updated_seq > ? AND (? IS NULL OR crew_id = ?)
-             ORDER BY updated_seq ASC LIMIT 1000`,
+             ORDER BY updated_seq ASC LIMIT ?`,
           )
-          .all(since, crewId ?? null, crewId ?? null) as ObservationRow[];
-        const items = rows.map(rowToObservation).map((item) => ({
+          .all(since, crewId ?? null, crewId ?? null, limit + 1) as ObservationRow[];
+        const page = rows.slice(0, limit);
+        const last = page[page.length - 1];
+        const items = page.map(rowToObservation).map((item) => ({
           ...item,
           plausibleRange: plausibilityRange(item.metric),
         }));
         return {
           items,
-          cursor: currentSeq(ctx.db),
+          cursor: last ? last.updated_seq : since,
+          hasMore: rows.length > limit,
           serverTime: ctx.now().toISOString(),
           gate: "server-side, demo rules",
         };
@@ -218,14 +225,20 @@ export function registerSync(app: FastifyInstance, ctx: Ctx) {
 
       const rows = ctx.db
         .prepare(
-          `SELECT json FROM ${collection}
+          `SELECT json, updated_seq FROM ${collection}
            WHERE updated_seq > ? AND (? IS NULL OR crew_id = ?)
-           ORDER BY updated_seq ASC LIMIT 1000`,
+           ORDER BY updated_seq ASC LIMIT ?`,
         )
-        .all(since, crewId ?? null, crewId ?? null) as Array<{ json: string }>;
+        .all(since, crewId ?? null, crewId ?? null, limit + 1) as Array<{
+        json: string;
+        updated_seq: number;
+      }>;
+      const page = rows.slice(0, limit);
+      const last = page[page.length - 1];
       return {
-        items: rows.map((row) => JSON.parse(row.json) as unknown),
-        cursor: currentSeq(ctx.db),
+        items: page.map((row) => JSON.parse(row.json) as unknown),
+        cursor: last ? last.updated_seq : since,
+        hasMore: rows.length > limit,
         serverTime: ctx.now().toISOString(),
       };
     },
