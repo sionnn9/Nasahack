@@ -24,17 +24,13 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-export function useHealthSimulation(
-  restingHeartRate: number,
-  crewId: string,
-  baselineShift = 0,
-) {
+export function useHealthSimulation(restingHeartRate: number, crewId: string) {
   const [vitals, setVitals] = useState<LiveVitals>(() =>
-    createInitialVitals(restingHeartRate + baselineShift),
+    createInitialVitals(restingHeartRate),
   );
   const vitalsRef = useRef(vitals);
   const [histories, setHistories] = useState<SensorHistories>(() =>
-    createInitialHistories(restingHeartRate + baselineShift),
+    createInitialHistories(restingHeartRate),
   );
   const [qualityOverride, setQualityOverride] =
     useState<QualityOverride>("Auto");
@@ -43,10 +39,10 @@ export function useHealthSimulation(
     qualityOverride === "Auto" ? "Usable" : qualityOverride;
 
   useEffect(() => {
-    const initialVitals = createInitialVitals(restingHeartRate + baselineShift);
+    const initialVitals = createInitialVitals(restingHeartRate);
     vitalsRef.current = initialVitals;
     setVitals(initialVitals);
-    setHistories(createInitialHistories(restingHeartRate + baselineShift));
+    setHistories(createInitialHistories(restingHeartRate));
 
     let elapsedSeconds = 0;
     const timer = window.setInterval(() => {
@@ -105,7 +101,7 @@ export function useHealthSimulation(
     }, 1000);
 
     return () => window.clearInterval(timer);
-  }, [crewId, restingHeartRate, baselineShift]);
+  }, [crewId, restingHeartRate]);
 
   const changeQualityOverride = (next: QualityOverride) => {
     qualityOverrideRef.current = next;

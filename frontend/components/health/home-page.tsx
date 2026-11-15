@@ -1,13 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { ChevronRight, Moon, Radio, ShieldAlert, Sun } from "lucide-react";
+import { ChevronRight, Moon, ShieldAlert, Sun } from "lucide-react";
 import StarBorder from "../StarBorder";
-import { crew, missionConfig } from "@/lib/mission-config";
-import { useStore } from "@/lib/store";
-import type { CrewMember } from "@/lib/types";
+import { crew, type CrewMember } from "./health-data";
 
 const starColors: Record<string, string> = {
   mint: "#5CF2C0",
@@ -16,28 +11,28 @@ const starColors: Record<string, string> = {
   rose: "#FF9FBA",
 };
 
-export function HomePage() {
-  const router = useRouter();
-  const theme = useStore((state) => state.theme);
-  const toggleTheme = useStore((state) => state.toggleTheme);
-  const [now, setNow] = useState<Date | null>(null);
-
-  useEffect(() => {
-    setNow(new Date());
-    const timer = window.setInterval(() => setNow(new Date()), 1000);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  const earthTime = now
-    ? now.toLocaleTimeString("en-GB", {
-        timeZone: "UTC",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-      })
-    : "--:--:--";
-
-  const openPerson = (person: CrewMember) => router.push(`/crew/${person.id}`);
+function HomePage({
+  dark,
+  time,
+  onToggleTheme,
+  onOpenPerson,
+  onEmergency,
+}: {
+  dark: boolean;
+  time: Date;
+  onToggleTheme: () => void;
+  onOpenPerson: (person: CrewMember) => void;
+  onEmergency: () => void;
+}) {
+  const earthTime =
+    time.getTime() === 0
+      ? "--:--:--"
+      : time.toLocaleTimeString("en-GB", {
+          timeZone: "UTC",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        });
 
   return (
     <section className="home-page">
@@ -47,31 +42,33 @@ export function HomePage() {
         </div>
         <button
           className="icon-button theme-button"
-          onClick={toggleTheme}
-          aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          onClick={onToggleTheme}
+          aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
         >
-          {theme === "dark" ? <Sun /> : <Moon />}
+          {dark ? <Sun /> : <Moon />}
         </button>
       </div>
 
       <div className="home-content">
         <div className="eyebrow">
-          <span className="eyebrow-line" /> {missionConfig.missionName.toUpperCase()} · CREW HEALTH
+          <span className="eyebrow-line" /> MARS TRANSIT · CREW HEALTH
         </div>
         <h1>Who are you?</h1>
         <p className="home-subtitle">
-          Choose your profile to see today&apos;s readings and check-in.
+          Choose your profile to begin today&apos;s check-in.
         </p>
 
         <div className="crew-grid">
           {crew.map((person, index) => (
             <StarBorder
-              key={person.id}
+              key={person.name}
               className={`crew-card ${person.color}`}
-              onClick={() => openPerson(person)}
+              onClick={() => onOpenPerson(person)}
               style={{ animationDelay: `${index * 80}ms` }}
-              color={starColors[person.color] ?? (theme === "dark" ? "#ffffff" : "#334155")}
-              trailColor={starColors[person.color] ?? (theme === "dark" ? "#ffffff" : "#334155")}
+              color={starColors[person.color] ?? (dark ? "#ffffff" : "#334155")}
+              trailColor={
+                starColors[person.color] ?? (dark ? "#ffffff" : "#334155")
+              }
               duration={4}
               direction="clockwise"
               stars={1}
@@ -82,7 +79,7 @@ export function HomePage() {
               hover="lap"
               sparkle={false}
               clickPulse
-              theme={theme}
+              theme={dark ? "dark" : "light"}
               backgroundColor="var(--surface)"
               textColor="var(--text)"
               borderColor="var(--border)"
@@ -97,29 +94,19 @@ export function HomePage() {
           ))}
         </div>
 
-        <Link className="emergency-cta" href="/emergency">
+        <button className="emergency-cta" onClick={onEmergency}>
           <ShieldAlert />
-          <span>HELP A CREWMATE</span>
-          <span className="emergency-sub">Opens instantly, no typing needed</span>
-        </Link>
-
-        <div className="home-links">
-          <Link className="text-button" href="/outbox">
-            <Radio aria-hidden="true" /> Outbox &amp; link
-          </Link>
-          <Link className="text-button" href="/reports">
-            Handoff &amp; reports
-          </Link>
-          <Link className="text-button" href="/surgeon">
-            Ground console (demo)
-          </Link>
-        </div>
+          <span>EMERGENCY</span>
+          <span className="emergency-sub">Get help now</span>
+        </button>
       </div>
 
       <div className="home-footer">
-        <span className="orbit-mark" /> CREW SIGNAL <span className="footer-sep">/</span> MISSION DAY{" "}
-        {missionConfig.missionDay}
+        <span className="orbit-mark" /> CREW SIGNAL{" "}
+        <span className="footer-sep">/</span> MISSION DAY 184
       </div>
     </section>
   );
 }
+
+export { HomePage };

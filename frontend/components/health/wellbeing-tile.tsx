@@ -1,200 +1,152 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Lock, LockOpen, ShieldCheck } from "lucide-react";
-import { BottomSheet } from "@/components/ui/bottom-sheet";
-import { useStore } from "@/lib/store";
-import type { CheckIn } from "@/lib/types";
+import { LockKeyhole, MessageCircleHeart } from "lucide-react";
+import {
+  computeWellbeingScore,
+  moodLabel,
+  type DailyCheckIn,
+} from "./health-data";
+import { LineChart } from "./visualizations";
 
 const answers = [
-  { key: "mood", label: "Mood", low: "Very difficult", high: "At ease" },
-  { key: "stress", label: "Stress", low: "Low", high: "High" },
-  { key: "rested", label: "Rested", low: "Not rested", high: "Rested" },
-  { key: "connected", label: "Connected", low: "Isolated", high: "Connected" },
+  { key: "mood", label: "Mood", reverse: false },
+  { key: "stress", label: "Stress", reverse: true },
+  { key: "rested", label: "Rested", reverse: false },
+  { key: "connected", label: "Connected", reverse: false },
 ] as const;
 
-function average(values: number[]): number | null {
-  if (values.length === 0) return null;
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
+function normalizedAnswer(value: string, reverse: boolean): number | null {
+  if (!value) return null;
+  const score = Number(value);
+  return ((reverse ? 5 - score : score - 1) / 4) * 100;
 }
 
-/** No composite score: the four answers and their trends are shown as-is. */
-export function WellbeingTile({
-  crewId,
-  checkIns,
+function answerLabel(
+  key: (typeof answers)[number]["key"],
+  value: string,
+): string {
+  if (!value) return "Not entered yet";
+  if (key === "mood") return moodLabel(value);
+  return `${value} / 5`;
+}
+
+function WellbeingTile({
+  checkIn,
+  history,
+  requestSent,
   onRequestSupport,
 }: {
-  crewId: string;
-  checkIns: CheckIn[];
+  checkIn: DailyCheckIn;
+  history: number[];
+  requestSent: boolean;
   onRequestSupport: () => void;
 }) {
-  const pinHash = useStore((state) => state.pinHash);
-  const unlocked = useStore((state) => state.privateUnlocked);
-  const setPin = useStore((state) => state.setPin);
-  const unlockPrivate = useStore((state) => state.unlockPrivate);
-  const lockPrivate = useStore((state) => state.lockPrivate);
-  const notify = useStore((state) => state.notify);
-  const [pin, setPinValue] = useState("");
-  const [sheetOpen, setSheetOpen] = useState(false);
-  const [error, setError] = useState("");
-
-  const mine = useMemo(
-    () =>
-      checkIns
-        .filter((entry) => entry.crewId === crewId)
-        .sort((a, b) => (a.observedAt < b.observedAt ? 1 : -1)),
-    [checkIns, crewId],
-  );
-  const current = mine[0];
-  const previous = mine.slice(1, 8);
-
-  const submitPin = async () => {
-    if (!/^\d{4}$/.test(pin)) {
-      setError("Use four digits.");
-      return;
-    }
-    if (pinHash) {
-      const ok = await unlockPrivate(pin);
-      if (!ok) {
-        setError("That PIN does not match.");
-        return;
-      }
-    } else {
-      await setPin(pin);
-      notify("Local PIN set. Private answers are unlocked on this device.", "ok");
-    }
-    setPinValue("");
-    setError("");
-  };
-
-  if (!unlocked) {
-    return (
-      <section className="wellbeing-tile locked" aria-labelledby="wellbeing-title">
-        <header>
-          <h2 id="wellbeing-title">How you have been feeling</h2>
-          <p>Private answers. Locked on this device.</p>
-        </header>
-        <div className="pin-row">
-          <Lock aria-hidden="true" />
-          <label htmlFor="wellbeing-pin">
-            {pinHash ? "Enter your 4-digit PIN" : "Set a 4-digit PIN"}
-          </label>
-          <input
-            id="wellbeing-pin"
-            inputMode="numeric"
-            autoComplete="off"
-            maxLength={4}
-            value={pin}
-            onChange={(event) => setPinValue(event.target.value.replace(/\D/g, ""))}
-            aria-invalid={!!error}
-            aria-describedby={error ? "pin-error" : undefined}
-          />
-          <button type="button" className="primary-button" onClick={() => void submitPin()}>
-            {pinHash ? "Unlock" : "Set PIN"}
-          </button>
-        </div>
-        {error && (
-          <p id="pin-error" role="alert" className="field-error">
-            {error}
-          </p>
-        )}
-        <p className="disclaimer-line">
-          A local lock, not encryption. Private answers are never shared unless you tick
-          them in a handoff.
-        </p>
-      </section>
-    );
-  }
+  const score = computeWellbeingScore(checkIn);
+  const minimum = history.length ? Math.min(...history) : null;
+  const maximum = history.length ? Math.max(...history) : null;
+  const historyPoints = history.slice(-7);
 
   return (
-    <section className="wellbeing-tile" aria-labelledby="wellbeing-title">
-      <header className="wellbeing-head">
+    <aside className="wellbeing-tile">
+      <div className="wellbeing-heading">
         <div>
-          <h2 id="wellbeing-title">How you have been feeling</h2>
-          <p>Self-reported. No combined score is calculated.</p>
+          <div className="wellbeing-title">
+            <LockKeyhole size={15} />
+            <h3>Mental wellbeing check-in</h3>
+          </div>
+          <p>Self-reported. Not a diagnosis.</p>
         </div>
-        <button type="button" className="text-button" onClick={lockPrivate}>
-          <LockOpen aria-hidden="true" /> Lock
-        </button>
-      </header>
-
-      <ul className="answer-bars">
-        {answers.map((entry) => {
-          const value = current ? current[entry.key] : null;
-          const history = previous
-            .map((checkIn) => checkIn[entry.key])
-            .filter((item): item is number => item !== null);
-          const avg = average(history);
-          const change = value !== null && avg !== null ? value - avg : null;
-          return (
-            <li key={entry.key}>
-              <div className="answer-label">
-                <strong>{entry.label}</strong>
-                <span>
-                  {value === null ? "Not answered" : `${value} / 5`}
-                  {change !== null && change !== 0 && (
-                    <em>
-                      {" "}
-                      {change > 0 ? "up" : "down"} {Math.abs(change).toFixed(1)} vs recent
-                    </em>
-                  )}
-                </span>
-              </div>
-              <div className="answer-track" aria-hidden="true">
-                <span style={{ width: `${value === null ? 0 : (value / 5) * 100}%` }} />
-              </div>
-              <div className="answer-scale">
-                <span>{entry.low}</span>
-                <span>{entry.high}</span>
-              </div>
-            </li>
-          );
-        })}
-      </ul>
-
-      <div className="wellbeing-note">
-        <ShieldCheck aria-hidden="true" />
-        <p>
-          Private answers stay on this device and appear in a handoff only when you tick
-          them.
-        </p>
       </div>
 
-      <button type="button" className="secondary-button" onClick={() => setSheetOpen(true)}>
-        Request private support
-      </button>
-
-      {sheetOpen && (
-        <BottomSheet
-          title="Request private support"
-          subtitle="Queued in your outbox. Nothing is sent while the link is down."
-          onClose={() => setSheetOpen(false)}
+      <div className="wellbeing-gauge-wrap">
+        <div
+          className="wellbeing-gauge"
+          style={{
+            background:
+              score === null
+                ? "conic-gradient(var(--raised) 360deg, var(--raised) 0deg)"
+                : `conic-gradient(var(--accent) ${score * 3.6}deg, var(--raised) 0deg)`,
+          }}
+          role="img"
+          aria-label={
+            score === null
+              ? "Not enough answers yet"
+              : `Wellbeing check-in score ${score} out of 100`
+          }
         >
-          <p>
-            This creates a private request in your outbox. It is not a diagnosis and it
-            does not share your mood answers.
-          </p>
-          <div className="sheet-actions">
-            <button
-              type="button"
-              className="primary-button"
-              onClick={() => {
-                onRequestSupport();
-                setSheetOpen(false);
-              }}
-            >
-              Add private request to outbox
-            </button>
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() => setSheetOpen(false)}
-            >
-              Cancel
-            </button>
+          <div>
+            {score === null ? (
+              <span className="wellbeing-missing">Not enough answers yet.</span>
+            ) : (
+              <strong>{score} / 100</strong>
+            )}
           </div>
-        </BottomSheet>
+        </div>
+        {score === null && (
+          <p className="wellbeing-prompt">Fill today&apos;s form.</p>
+        )}
+      </div>
+
+      <div className="wellbeing-answers">
+        {answers.map(({ key, label, reverse }) => {
+          const value = checkIn[key];
+          const normalized = normalizedAnswer(value, reverse);
+          return (
+            <div className="wellbeing-answer" key={key}>
+              <div>
+                <span>{label}</span>
+                <b>{answerLabel(key, value)}</b>
+              </div>
+              <span
+                className="wellbeing-answer-bar"
+                role="img"
+                aria-label={`${label}: ${answerLabel(key, value)}`}
+              >
+                <i
+                  style={{
+                    width: normalized === null ? "0%" : `${normalized}%`,
+                  }}
+                />
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      <p className="wellbeing-formula">
+        Average of your 4 answers today.
+        <span>
+          mood = (m−1)/4×100 · stress = (5−s)/4×100 · rested and connected =
+          (answer−1)/4×100
+        </span>
+      </p>
+
+      <div className="wellbeing-history">
+        <div>
+          <b>
+            {minimum === null || maximum === null
+              ? "Your last 7 days: no sample"
+              : `Your last 7 days: ${minimum} to ${maximum}`}
+          </b>
+          <LineChart
+            values={historyPoints}
+            label="Sample wellbeing check-in values over the last seven days"
+          />
+        </div>
+      </div>
+
+      <button
+        className="secondary-button support-button"
+        onClick={onRequestSupport}
+      >
+        <MessageCircleHeart />
+        {requestSent ? "Request saved privately" : "Request private support"}
+      </button>
+      {requestSent && (
+        <p className="private-outbox-note">Saved to your private outbox.</p>
       )}
-    </section>
+    </aside>
   );
 }
+
+export { WellbeingTile };

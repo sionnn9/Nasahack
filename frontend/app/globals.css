@@ -1,6 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "./v2.css";
+@import "shadcn/tailwind.css";
 
 :root {
   --page: #0b1020;

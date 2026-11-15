@@ -1,247 +1,238 @@
 "use client";
 
-import { useState } from "react";
-import { Info, ShieldAlert } from "lucide-react";
+import { LockKeyhole, Radio } from "lucide-react";
 import {
-  areaMetrics,
-  dailyTrend,
-  latest,
-  statusFor,
-} from "@/lib/observations/derived";
-import { formatValue, metricMeta } from "@/lib/metrics";
-import { readingFor } from "@/lib/readings";
-import { MetricChart, ChartLegend, type ChartPoint } from "@/components/health/metric-chart";
-import { StatusChip } from "@/components/health/status-chip";
-import { TrustRing, formatClock } from "@/components/health/trust-ring";
-import { useStore } from "@/lib/store";
-import type { BodyArea, Metric, Observation } from "@/lib/types";
+  formatSleep,
+  formatUtcTime,
+  moodLabel,
+  radiationDisclaimer,
+  radiationSamples,
+  radiationUnit,
+  type BodyArea,
+  type DailyCheckIn,
+  type LiveVitals,
+  type SensorHistories,
+  type SensorQuality,
+} from "./health-data";
+import { liveReadings } from "./health-data";
+import { LineChart } from "./visualizations";
+import { SensorQualityBadge } from "./sensor-quality-badge";
 
-export function ReadingDetails({
-  crewId,
-  area,
-  observations,
-  liveToday,
-  sensorUnplugged,
-  onOpenGuide,
+function ReadingDetails({
+  selected,
+  headTab,
+  checkIn,
+  vitals,
+  quality,
+  histories,
+  onHeadTabChange,
 }: {
-  crewId: string;
-  area: BodyArea;
-  observations: Observation[];
-  liveToday: Partial<Record<Metric, ChartPoint[]>>;
-  sensorUnplugged: boolean;
-  onOpenGuide: (key: string) => void;
+  selected: BodyArea;
+  headTab: "mood" | "sleep";
+  checkIn: DailyCheckIn;
+  vitals: LiveVitals;
+  quality: SensorQuality;
+  histories: SensorHistories;
+  onHeadTabChange: (tab: "mood" | "sleep") => void;
 }) {
-  const privateUnlocked = useStore((state) => state.privateUnlocked);
-  const metrics = areaMetrics[area] ?? [];
-  const [headTab, setHeadTab] = useState<"mood" | "sleep_minutes">("mood");
-
-  const shown =
-    area === "Head" ? [headTab] : metrics.length > 0 ? metrics : [];
-
-  return (
-    <section className="body-card reading-details" aria-labelledby="details-title">
-      <header className="details-head">
-        <div>
-          <span className="eyebrow-line" />
-          <h2 id="details-title">{area}</h2>
-        </div>
-        {area === "Head" && (
-          <div className="head-tabs" role="tablist" aria-label="Head readings">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={headTab === "mood"}
-              onClick={() => setHeadTab("mood")}
-            >
-              Mood
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={headTab === "sleep_minutes"}
-              onClick={() => setHeadTab("sleep_minutes")}
-            >
-              Sleep
-            </button>
-          </div>
-        )}
-      </header>
-
-      {area === "Radiation" ? (
-        <div className="details-static">
-          <p className="details-value">
-            2.4 <small>mSv cumulative</small>
-          </p>
-          <p>
-            Passive dosimeters are read on a schedule. This is not a live measurement and
-            cannot be compared with other readings.
-          </p>
-          <button type="button" className="text-button" onClick={() => onOpenGuide("radiation")}>
-            <Info aria-hidden="true" /> Measurement guide
-          </button>
-        </div>
-      ) : (
-        shown.map((metric) => (
-          <MetricDetail
-            key={metric}
-            metric={metric}
-            crewId={crewId}
-            observations={observations}
-            liveToday={liveToday}
-            sensorUnplugged={sensorUnplugged}
-            locked={
-              !!readingFor(metric)?.private && !privateUnlocked
-            }
-            onOpenGuide={onOpenGuide}
-          />
-        ))
-      )}
-    </section>
-  );
-}
-
-function MetricDetail({
-  metric,
-  crewId,
-  observations,
-  liveToday,
-  locked,
-  sensorUnplugged,
-  onOpenGuide,
-}: {
-  metric: Metric;
-  crewId: string;
-  observations: Observation[];
-  liveToday: Partial<Record<Metric, ChartPoint[]>>;
-  locked: boolean;
-  sensorUnplugged: boolean;
-  onOpenGuide: (key: string) => void;
-}) {
-  const meta = metricMeta[metric];
-  const rawNewest = latest(
-    observations.filter((entry) => entry.crewId === crewId),
-    metric,
-  );
-  // A sensor that has stopped reporting cannot leave a reassuring status on
-  // screen: the value becomes "No valid reading" with a plain reason.
-  const liveMetric = ["heart_rate", "skin_temp", "bp_systolic", "bp_diastolic", "motion"].includes(metric);
-  const unplugged = sensorUnplugged && liveMetric;
-  const newest = unplugged && rawNewest ? { ...rawNewest, quality: "no_contact" as const, qualityReason: "The sensor is not reporting. This is not a current measurement." } : rawNewest;
-  const comparison = unplugged
-    ? {
-        state: "no_valid_reading" as const,
-        label: "No valid reading",
-        detail: "The sensor is not reporting. Check the contact and try again.",
-        comparableCount: 0,
-        range: null,
-      }
-    : statusFor(observations, crewId, metric);
-  const reading = readingFor(metric);
-  const livePoints = liveToday[metric] ?? [];
-  const trendPoints = dailyTrend(
-    observations.filter((entry) => entry.crewId === crewId),
-    metric,
-  );
-  const [laneFilter, setLaneFilter] = useState<Observation["lane"] | "all">("all");
-  const lanes = new Set(trendPoints.map((point) => point.lane));
-  // Lanes are never merged: "all" still shows one lane at a time, the newest.
-  const activeLane = laneFilter === "all" ? trendPoints[trendPoints.length - 1]?.lane : laneFilter;
-  const filteredTrend = trendPoints.filter((point) => point.lane === activeLane);
-
-  if (locked) {
+  if (selected === "Radiation") {
     return (
-      <div className="metric-detail locked">
-        <h3>{meta.label}</h3>
-        <p>Private answer. Unlock it in the wellbeing tile to see the value and trend.</p>
-      </div>
+      <article className="detail-card new-detail-card">
+        <div className="detail-top">
+          <div>
+            <div className="eyebrow">STATIC SAMPLE DATA</div>
+            <h2>Radiation</h2>
+          </div>
+          <span className="reading-icon lavender">
+            <Radio size={18} />
+          </span>
+        </div>
+        <div className="reading">
+          <strong>{radiationSamples[radiationSamples.length - 1].toFixed(1)}</strong>
+          <span>{radiationUnit}</span>
+        </div>
+        <span className="source-badge">Static sample data</span>
+        <LineChart
+          values={radiationSamples}
+          color="var(--lavender)"
+          tall
+          label="Radiation static sample data timeline"
+        />
+        <p className="radiation-disclaimer">{radiationDisclaimer}</p>
+        <p className="plain-explanation">
+          Twenty-four illustrative hourly sample values. No personal
+          measurement or exposure estimate is provided.
+        </p>
+      </article>
     );
   }
 
-  return (
-    <div className="metric-detail">
-      <div className="metric-head">
-        <div>
-          <h3>{meta.label}</h3>
-          <p className="metric-sub">{reading?.whatItIs}</p>
-        </div>
-        <div className="metric-head-side">
-          <span className="details-value">
-            {newest ? formatValue(metric, newest.value) : "—"}
-          </span>
-          <TrustRing observation={newest} />
-        </div>
-      </div>
+  if (selected === "Head") {
+    const isMood = headTab === "mood";
+    const value = isMood
+      ? checkIn.mood
+        ? moodLabel(checkIn.mood)
+        : "Not entered yet"
+      : formatSleep(checkIn);
 
-      <div className="metric-row">
-        <StatusChip comparison={comparison} />
-        {newest && (
-          <span className="metric-method">
-            {newest.lane} · measured {formatClock(newest.observedAt)} UTC
-          </span>
+    return (
+      <article className="detail-card new-detail-card">
+        <div className="eyebrow">ENTERED BY YOU</div>
+        <h2>Head</h2>
+        <div className="details-tabs" role="tablist" aria-label="Head readings">
+          <button
+            role="tab"
+            aria-selected={isMood}
+            className={isMood ? "active" : ""}
+            onClick={() => onHeadTabChange("mood")}
+          >
+            Mood <LockKeyhole size={13} />
+          </button>
+          <button
+            role="tab"
+            aria-selected={!isMood}
+            className={!isMood ? "active" : ""}
+            onClick={() => onHeadTabChange("sleep")}
+          >
+            Sleep
+          </button>
+        </div>
+        <p className="detail-reading-label">{isMood ? "Mood" : "Sleep"}</p>
+        <div className="reading detail-reading">
+          <strong>{value}</strong>
+          {!isMood && checkIn.sleepHours !== "" && <span>hours and minutes</span>}
+        </div>
+        {isMood && (
+          <p className="privacy-caption">
+            <LockKeyhole size={14} /> Private. Not included in reports unless you
+            choose to include it.
+          </p>
         )}
-      </div>
+        <p className="plain-explanation">
+          What you entered · {checkIn.enteredAt
+            ? `${checkIn.enteredAt} UTC`
+            : "Not entered yet"}
+        </p>
+      </article>
+    );
+  }
 
-      <div className="metric-charts">
-        <div>
-          <h4>Today (live)</h4>
-          <MetricChart
-            points={livePoints.length > 0 ? livePoints : trendPoints.slice(-1)}
-            metric={metric}
-            band={comparison.range}
-            label={`${meta.label} today`}
-            height={130}
-          />
+  if (selected === "Abdomen") {
+    return (
+      <article className="detail-card new-detail-card">
+        <div className="eyebrow">ENTERED BY YOU</div>
+        <h2>Blood sugar</h2>
+        <div className="reading detail-reading">
+          <strong>{checkIn.bloodSugar || "Not entered yet"}</strong>
+          {checkIn.bloodSugar && <span>mg/dL</span>}
         </div>
+        <p className="plain-explanation">
+          What you entered · Fingertip test with the glucometer.
+          {checkIn.bloodSugarUnavailable
+            ? " You marked that you could not measure this today."
+            : ""}
+        </p>
+        <p className="source-caption">
+          What you entered ·{" "}
+          {checkIn.enteredAt
+            ? `${checkIn.enteredAt} UTC`
+            : "Not entered yet"}
+        </p>
+      </article>
+    );
+  }
+
+  const reading = liveReadings.find((item) => item.area === selected);
+  if (!reading) return null;
+
+  const displayedValue =
+    quality !== "Usable"
+      ? "No valid reading"
+      : selected === "Heart"
+        ? String(vitals.heartRate)
+        : selected === "Skin"
+          ? vitals.skinTemperature.toFixed(1)
+          : selected === "Arm"
+            ? `${vitals.systolic} / ${vitals.diastolic}`
+            : vitals.motion.toFixed(2);
+  const unit = quality !== "Usable" ? "" : reading.unit;
+  const values = histories[reading.key].filter(
+    (value): value is number => value !== null,
+  );
+  const currentValue =
+    selected === "Heart"
+      ? vitals.heartRate
+      : selected === "Skin"
+        ? vitals.skinTemperature
+        : selected === "Arm"
+          ? vitals.systolic
+          : vitals.motion;
+  const rangeValues = values.length ? values : [currentValue];
+  const minimum = Math.min(...rangeValues);
+  const maximum = Math.max(...rangeValues);
+  const rangePosition =
+    maximum === minimum
+      ? 50
+      : Math.max(0, Math.min(100, ((currentValue - minimum) / (maximum - minimum)) * 100));
+  const updatedAt = formatUtcTime(vitals.updatedAt[reading.key]);
+  const isBloodPressure = selected === "Arm";
+
+  return (
+    <article className="detail-card new-detail-card">
+      <div className="detail-top">
         <div>
-          <div className="chart-head">
-            <h4>14-day trend (daily)</h4>
-            <div className="lane-filter" role="group" aria-label="Data lane">
-              {(["all", "live", "manual", "replay", "synthetic"] as const)
-                .filter((lane) => lane === "all" || lanes.has(lane))
-                .map((lane) => (
-                  <button
-                    key={lane}
-                    type="button"
-                    className={laneFilter === lane ? "active" : ""}
-                    aria-pressed={laneFilter === lane}
-                    onClick={() => setLaneFilter(lane)}
-                  >
-                    {lane === "all" ? "Newest lane" : lane}
-                  </button>
-                ))}
-            </div>
+          <div className="eyebrow">
+            CURRENT READING <span className="source-label">Live sensor</span>
           </div>
-          <MetricChart
-            points={filteredTrend}
-            metric={metric}
-            band={comparison.range}
-            label={`${meta.label} 14 day trend`}
-            height={130}
-          />
+          <h2>{reading.name}</h2>
         </div>
+        <span className={`reading-icon ${reading.color}`}>
+          <reading.icon size={18} />
+        </span>
       </div>
 
-      <ChartLegend />
-
-      <div className="metric-foot">
-        <p>
-          <strong>Tell the crew when.</strong> {reading?.tellCrewWhen}
-        </p>
-        <button
-          type="button"
-          className="text-button"
-          onClick={() => onOpenGuide(reading?.key ?? "")}
-        >
-          <Info aria-hidden="true" /> Measurement guide
-        </button>
+      <div className="reading detail-reading">
+        <strong>{displayedValue}</strong>
+        {unit && <span>{unit}</span>}
       </div>
 
-      {comparison.state === "attention" && (
-        <p className="metric-attention">
-          <ShieldAlert aria-hidden="true" /> Differs from your recent readings. This is a
-          prompt to check, not a diagnosis.
-        </p>
+      <div className="reading-status detail-quality">
+        <SensorQualityBadge status={quality} />
+        <span>Updated {updatedAt} UTC</span>
+      </div>
+
+      {quality === "Usable" ? (
+        <div className={`live-reading-meter ${isBloodPressure ? "range-bar" : "gauge-meter"}`}>
+          <div className="meter-track">
+            <span style={{ left: `${rangePosition}%` }} />
+          </div>
+          <div className="meter-labels">
+            <span>{minimum.toFixed(selected === "Skin" ? 1 : 0)}</span>
+            <span>{maximum.toFixed(selected === "Skin" ? 1 : 0)}</span>
+          </div>
+          <small>{isBloodPressure ? "Range in recent cuff samples" : "Recent sensor samples"}</small>
+        </div>
+      ) : (
+        <div className="unusable-reading-note">
+          Current reading is omitted from the timeline while sensor contact is
+          not usable.
+        </div>
       )}
-    </div>
+
+      <LineChart
+        values={histories[reading.key]}
+        color={`var(--${reading.color})`}
+        tall
+        label={`${reading.name} live sensor timeline`}
+      />
+      <p className="plain-explanation">{reading.whatItIs}</p>
+      <p className="source-caption">Source: Live sensor · Simulated IoT</p>
+      <p className="plain-explanation">
+        Tell the crew or Earth if you feel unwell or would like help reviewing a
+        reading.
+      </p>
+    </article>
   );
 }
+
+export { ReadingDetails };
