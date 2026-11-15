@@ -115,6 +115,7 @@ export const outboxItemSchema = z.object({
   title: z.string().optional().default("Handoff"),
   payload: z.record(z.string(), z.unknown()).optional().default({}),
   private: z.boolean().optional().default(false),
+  includePrivate: z.boolean().optional().default(false),
   history: z
     .array(z.object({ state: outboxStateSchema, at: iso, note: z.string() }))
     .optional()
