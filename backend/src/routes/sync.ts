@@ -98,7 +98,8 @@ export function registerSync(app: FastifyInstance, ctx: Ctx) {
       );
       const updateQuality = ctx.db.prepare(
         `UPDATE observations
-         SET quality = ?, quality_reason = ?, raw_value = ?, updated_seq = ?
+         SET quality = ?, quality_reason = ?, raw_value = COALESCE(?, raw_value),
+           updated_seq = ?
          WHERE id = ?`,
       );
 
