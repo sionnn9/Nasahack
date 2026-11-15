@@ -32,6 +32,15 @@ import { AllReadings } from "./all-readings";
 import { ReadingDetails } from "./reading-details";
 import { BodyMap, LineChart } from "./visualizations";
 
+const areaDisplayLabels: Record<Exclude<BodyArea, "Radiation">, string> = {
+  Head: "Mood/Sleep",
+  Heart: "Heart rate",
+  Arm: "Blood Pressure",
+  Skin: "Skin temperature",
+  Abdomen: "Blood Sugar",
+  Legs: "Motion/Activity",
+};
+
 function DashboardPage({
   astronaut,
   page,
@@ -280,7 +289,7 @@ function DashboardPage({
                   className={selected === area ? "selected" : ""}
                   onClick={() => onSelectArea(area)}
                 >
-                  {area === "Skin" ? "Skin / torso" : area}
+                  {areaDisplayLabels[area]}
                 </button>
               ))}
             </div>
