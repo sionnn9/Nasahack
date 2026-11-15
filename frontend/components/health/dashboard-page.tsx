@@ -32,6 +32,16 @@ import { AllReadings } from "./all-readings";
 import { ReadingDetails } from "./reading-details";
 import { BodyMap, LineChart } from "./visualizations";
 
+const areaDisplayLabels: Record<BodyArea, string> = {
+  Head: "Mood/Sleep",
+  Heart: "Heart rate",
+  Arm: "Blood Pressure",
+  Skin: "Skin temperature",
+  Abdomen: "Blood Sugar",
+  Legs: "Motion/Activity",
+  Radiation: "Radiation",
+};
+
 function DashboardPage({
   astronaut,
   page,
@@ -91,27 +101,19 @@ function DashboardPage({
       `Mood: ${checkIn.mood ? moodLabel(checkIn.mood) : "Not entered yet"}`,
       `Sleep: ${formatSleep(checkIn)}`,
     ],
-    Heart: [
-      isUsable ? `${vitals.heartRate} bpm` : "No valid reading",
-    ],
+    Heart: [isUsable ? `${vitals.heartRate} bpm` : "No valid reading"],
     Arm: [
       isUsable
         ? `${vitals.systolic} / ${vitals.diastolic} mmHg`
         : "No valid reading",
     ],
     Skin: [
-      isUsable
-        ? `${vitals.skinTemperature.toFixed(1)} °C`
-        : "No valid reading",
+      isUsable ? `${vitals.skinTemperature.toFixed(1)} °C` : "No valid reading",
     ],
     Abdomen: [
-      checkIn.bloodSugar
-        ? `${checkIn.bloodSugar} mg/dL`
-        : "Not entered yet",
+      checkIn.bloodSugar ? `${checkIn.bloodSugar} mg/dL` : "Not entered yet",
     ],
-    Legs: [
-      isUsable ? `${vitals.motion.toFixed(2)} g` : "No valid reading",
-    ],
+    Legs: [isUsable ? `${vitals.motion.toFixed(2)} g` : "No valid reading"],
   };
   const currentHeartValues = histories.heartRate.filter(
     (value): value is number => value !== null,
@@ -194,7 +196,8 @@ function DashboardPage({
 
           <div className="welcome-actions">
             <button className="secondary-button" onClick={onBeginSensorCheck}>
-              <Activity /> {checking ? "Checking sensors…" : "Check all sensors"}
+              <Activity />{" "}
+              {checking ? "Checking sensors…" : "Check all sensors"}
             </button>
             <button className="primary-button" onClick={onOpenForm}>
               Fill today&apos;s form <ChevronRight />
@@ -205,7 +208,9 @@ function DashboardPage({
         <div className="task-row">
           {["Sensor check", "Mood", "Sleep", "Symptoms"].map((task, index) => (
             <span className="task-chip" key={task}>
-              <span className={index === 0 || checkIn.enteredAt ? "task-check" : ""}>
+              <span
+                className={index === 0 || checkIn.enteredAt ? "task-check" : ""}
+              >
                 {index === 0 || checkIn.enteredAt ? (
                   <Check size={13} />
                 ) : (
@@ -245,6 +250,13 @@ function DashboardPage({
                     ? "Static environmental sample data."
                     : "Select a body area to explore its readings."}
                 </p>
+                <button
+                  className={`radiation-chip ${selected === "Radiation" ? "selected" : ""}`}
+                  onClick={() => onSelectArea("Radiation")}
+                >
+                  <span className="radiation-chip-dot" />
+                  Environment · Radiation (static data)
+                </button>
               </div>
               <button
                 className="text-button"
@@ -264,13 +276,6 @@ function DashboardPage({
                 labels={bodyLabels}
                 onSelect={onSelectArea}
               />
-              <button
-                className={`radiation-chip ${selected === "Radiation" ? "selected" : ""}`}
-                onClick={() => onSelectArea("Radiation")}
-              >
-                <span className="radiation-chip-dot" />
-                Environment · Radiation (static data)
-              </button>
             </div>
 
             <div className="area-list" aria-label="Choose body area">
@@ -280,7 +285,7 @@ function DashboardPage({
                   className={selected === area ? "selected" : ""}
                   onClick={() => onSelectArea(area)}
                 >
-                  {area === "Skin" ? "Skin / torso" : area}
+                  {areaDisplayLabels[area]}
                 </button>
               ))}
             </div>
@@ -304,7 +309,8 @@ function DashboardPage({
               <h2>Today</h2>
             </div>
             <span className="date-pill">
-              <Clock3 /> {time.toLocaleDateString("en-GB", { dateStyle: "medium" })}
+              <Clock3 />{" "}
+              {time.toLocaleDateString("en-GB", { dateStyle: "medium" })}
             </span>
           </div>
 
@@ -341,30 +347,6 @@ function DashboardPage({
                 Poor contact · Sensor fit · 8 seconds · earlier today
               </p>
             )}
-            <div className="timeline-events" aria-label="Events today">
-              {events.map((event, index) => {
-                const EventIcon =
-                  event.kind === "exercise"
-                    ? Activity
-                    : event.kind === "meal"
-                      ? Utensils
-                      : Check;
-                return (
-                  <span className="timeline-event" key={`${event.label}-${index}`}>
-                    <EventIcon size={14} />
-                    <b>{event.label}</b>
-                    <time>{event.time ? `${event.time} UTC` : ""}</time>
-                  </span>
-                );
-              })}
-              {score !== null && (
-                <span className="timeline-event private-event">
-                  <Moon size={14} />
-                  <b>Private wellbeing check-in saved</b>
-                  <time>{checkIn.enteredAt} UTC</time>
-                </span>
-              )}
-            </div>
           </article>
         </section>
 
