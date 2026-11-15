@@ -9,6 +9,7 @@ import { createBus, type Ctx } from "./context.js";
 import { registerHealth } from "./routes/health.js";
 import { registerLink } from "./routes/link.js";
 import { registerPackets } from "./routes/packets.js";
+import { registerSurgeon } from "./routes/surgeon.js";
 import { startScheduler } from "./scheduler.js";
 
 declare module "fastify" {
@@ -81,6 +82,7 @@ export async function buildApp(
   registerHealth(app, ctx);
   registerLink(app, ctx);
   registerPackets(app, ctx);
+  registerSurgeon(app, ctx);
 
   const stopScheduler = options.scheduler === false ? null : startScheduler(ctx);
 
