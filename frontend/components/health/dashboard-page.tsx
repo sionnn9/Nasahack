@@ -4,6 +4,7 @@ import {
   Activity,
   ArrowLeft,
   Check,
+  CircleHelp,
   ChevronRight,
   Clock3,
   Moon,
@@ -68,6 +69,7 @@ function DashboardPage({
   onHeadTabChange,
   onQualityOverrideChange,
   onRequestSupport,
+  onReplayTutorial,
 }: {
   astronaut: CrewMember;
   page: PageName;
@@ -94,6 +96,7 @@ function DashboardPage({
   onHeadTabChange: (tab: "mood" | "sleep") => void;
   onQualityOverrideChange: (value: QualityOverride) => void;
   onRequestSupport: () => void;
+  onReplayTutorial: () => void;
 }) {
   const isUsable = quality === "Usable";
   const bodyLabels: Partial<Record<BodyArea, string[]>> = {
@@ -166,6 +169,15 @@ function DashboardPage({
           </button>
         </div>
         <div className="nav-actions">
+          <button
+            className="nav-tutorial"
+            onClick={onReplayTutorial}
+            aria-label={`Replay tutorial for ${astronaut.name}`}
+            title="Replay tutorial"
+          >
+            <CircleHelp />
+            <span>Tutorial</span>
+          </button>
           <button
             className="icon-button"
             onClick={onThemeToggle}

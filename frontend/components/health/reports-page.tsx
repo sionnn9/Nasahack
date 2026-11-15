@@ -2,6 +2,7 @@
 
 import {
   ArrowLeft,
+  CircleHelp,
   Download,
   LockKeyhole,
   Moon,
@@ -41,6 +42,7 @@ function ReportsPage({
   onToggleOffline,
   onTogglePrivate,
   onSend,
+  onReplayTutorial,
 }: {
   astronaut: CrewMember;
   checkIn: DailyCheckIn;
@@ -59,6 +61,7 @@ function ReportsPage({
   onToggleOffline: (value: boolean) => void;
   onTogglePrivate: (value: boolean) => void;
   onSend: () => void;
+  onReplayTutorial: () => void;
 }) {
   const score = computeWellbeingScore(checkIn);
   const sensorValue = (value: string) =>
@@ -174,6 +177,17 @@ function ReportsPage({
           </button>
         </div>
         <div className="nav-actions">
+          {hasAstronaut && (
+            <button
+              className="nav-tutorial"
+              onClick={onReplayTutorial}
+              aria-label={`Replay tutorial for ${astronaut.name}`}
+              title="Replay tutorial"
+            >
+              <CircleHelp />
+              <span>Tutorial</span>
+            </button>
+          )}
           <button
             className="icon-button"
             onClick={onThemeToggle}

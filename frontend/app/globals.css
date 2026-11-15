@@ -411,6 +411,36 @@ h1 {
   width: 42px;
   height: 42px;
 }
+.nav-tutorial {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 11px 14px;
+  border: 1px solid var(--border);
+  border-radius: 30px;
+  background: var(--raised);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    border-color 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease;
+}
+.nav-tutorial svg {
+  width: 16px;
+  height: 16px;
+}
+.nav-tutorial:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 24%, transparent);
+}
+.nav-tutorial:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .nav-emergency {
   display: flex;
   align-items: center;
@@ -1512,6 +1542,10 @@ h1 {
   .nav-actions .icon-button {
     width: 38px;
     height: 38px;
+  }
+  .nav-tutorial {
+    padding: 9px 10px;
+    font-size: 11px;
   }
   .nav-emergency {
     padding: 10px 12px;
