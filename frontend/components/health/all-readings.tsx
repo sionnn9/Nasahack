@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -160,8 +160,16 @@ function AllReadings({
   onHeadTabChange: (tab: "mood" | "sleep") => void;
   onRequestSupport: () => void;
 }) {
-  const [history] = useState(() => getHistoricalDays(astronaut.id));
-  const [checkInHistory] = useState(() => getHistoricalCheckIns(astronaut.id));
+  const [, setDatasetVersion] = useState(0);
+
+  useEffect(() => {
+    const handleDatasetChange = () => setDatasetVersion((v) => v + 1);
+    window.addEventListener("crewsignal-dataset-change", handleDatasetChange);
+    return () => window.removeEventListener("crewsignal-dataset-change", handleDatasetChange);
+  }, []);
+
+  const history = getHistoricalDays(astronaut.id);
+  const checkInHistory = getHistoricalCheckIns(astronaut.id);
   const dailyHistory = history.filter((day) => day.dayOffset < 0);
   const radiationHistory = radiationSamples;
   const usable = quality === "Usable";

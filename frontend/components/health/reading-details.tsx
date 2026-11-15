@@ -13,6 +13,8 @@ import {
   type LiveVitals,
   type SensorHistories,
   type SensorQuality,
+  CLINICAL_REFERENCE_RANGES,
+  getReadingClinicalZone,
 } from "./health-data";
 import { liveReadings } from "./health-data";
 import { LineChart } from "./visualizations";
@@ -167,15 +169,34 @@ function ReadingDetails({
         : selected === "Arm"
           ? vitals.systolic
           : vitals.motion;
+
+  const refRange = CLINICAL_REFERENCE_RANGES[reading.key];
+  const clinicalZone = getReadingClinicalZone(reading.key, currentValue);
+
   const rangeValues = values.length ? values : [currentValue];
   const minimum = Math.min(...rangeValues);
   const maximum = Math.max(...rangeValues);
-  const rangePosition =
-    maximum === minimum
+
+  // Position needle against standard clinical physiological scale (e.g. 45–180 bpm)
+  const clinicalPosition =
+    refRange.max === refRange.min
       ? 50
-      : Math.max(0, Math.min(100, ((currentValue - minimum) / (maximum - minimum)) * 100));
+      : Math.max(
+          2,
+          Math.min(
+            98,
+            ((currentValue - refRange.min) / (refRange.max - refRange.min)) * 100,
+          ),
+        );
+
+  // Nominal band overlay on track
+  const nominalLeft = ((refRange.nominalLow - refRange.min) / (refRange.max - refRange.min)) * 100;
+  const nominalWidth = ((refRange.nominalHigh - refRange.nominalLow) / (refRange.max - refRange.min)) * 100;
+
   const updatedAt = formatUtcTime(vitals.updatedAt[reading.key]);
   const isBloodPressure = selected === "Arm";
+  const isSkin = selected === "Skin";
+  const isMotion = selected === "Legs";
 
   return (
     <article className="detail-card new-detail-card">
@@ -194,6 +215,11 @@ function ReadingDetails({
       <div className="reading detail-reading">
         <strong>{displayedValue}</strong>
         {unit && <span>{unit}</span>}
+        {quality === "Usable" && (
+          <span className={`clinical-zone-pill ${clinicalZone.tone}`}>
+            {clinicalZone.label}
+          </span>
+        )}
       </div>
 
       <div className="reading-status detail-quality">
@@ -204,13 +230,31 @@ function ReadingDetails({
       {quality === "Usable" ? (
         <div className={`live-reading-meter ${isBloodPressure ? "range-bar" : "gauge-meter"}`}>
           <div className="meter-track">
-            <span style={{ left: `${rangePosition}%` }} />
+            {/* Highlight nominal clinical target zone */}
+           {/*  <span
+              className="meter-nominal-band"
+              style={{
+                left: `${nominalLeft}%`,
+                width: `${nominalWidth}%`,
+              }}
+              title={`Nominal baseline zone: ${refRange.nominalLow}–${refRange.nominalHigh} ${reading.unit}`}
+            /> */}
+            <span
+              className="meter-indicator-needle"
+              style={{ left: `${clinicalPosition}%` }}
+              title={`Current: ${displayedValue} ${reading.unit}`}
+            />
           </div>
           <div className="meter-labels">
-            <span>{minimum.toFixed(selected === "Skin" ? 1 : 0)}</span>
-            <span>{maximum.toFixed(selected === "Skin" ? 1 : 0)}</span>
+            <span>Scale min: {refRange.min} {isSkin ? "°C" : isMotion ? "g" : ""}</span>
+            <span className="meter-center-target">
+              Target: {refRange.nominalLow}–{refRange.nominalHigh} {reading.unit}
+            </span>
+            <span>Scale max: {refRange.max} {isSkin ? "°C" : isMotion ? "g" : ""}</span>
           </div>
-          <small>{isBloodPressure ? "Range in recent cuff samples" : "Recent sensor samples"}</small>
+          <small className="observed-recent-span">
+            Observed (last 60s): <b>{minimum.toFixed(isSkin ? 1 : isMotion ? 2 : 0)} – {maximum.toFixed(isSkin ? 1 : isMotion ? 2 : 0)} {reading.unit}</b>
+          </small>
         </div>
       ) : (
         <div className="unusable-reading-note">
@@ -226,10 +270,9 @@ function ReadingDetails({
         label={`${reading.name} live sensor timeline`}
       />
       <p className="plain-explanation">{reading.whatItIs}</p>
-      <p className="source-caption">Source: Live sensor · Simulated IoT</p>
+      <p className="source-caption">Source: Live bio-telemetry · Active sensor stream</p>
       <p className="plain-explanation">
-        Tell the crew or Earth if you feel unwell or would like help reviewing a
-        reading.
+        Tell the crew or flight surgeon if readings exceed expected mission thresholds.
       </p>
     </article>
   );

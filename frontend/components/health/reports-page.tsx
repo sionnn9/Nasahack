@@ -22,6 +22,7 @@ import {
   type LiveVitals,
   type SensorQuality,
 } from "./health-data";
+import { getActiveAstronautDataset } from "@/lib/datasets/nasa-telemetry-datasets";
 
 function ReportsPage({
   astronaut,
@@ -60,12 +61,19 @@ function ReportsPage({
   onTogglePrivate: (value: boolean) => void;
   onSend: () => void;
 }) {
+  const activeDataset = getActiveAstronautDataset(astronaut.id);
   const score = computeWellbeingScore(checkIn);
   const sensorValue = (value: string) =>
     quality === "Usable" ? value : "No valid reading";
   const report = {
     astronaut: astronaut.name,
     role: astronaut.role,
+    dataset: {
+      id: activeDataset.datasetId,
+      title: activeDataset.title,
+      source: activeDataset.source,
+      sampleFrequency: activeDataset.sampleFrequency,
+    },
     generatedAt: time.toISOString(),
     readings: {
       heartRate: {
@@ -193,7 +201,7 @@ function ReportsPage({
           <div className="eyebrow">CREW HEALTH · REPORT</div>
           <h1>Daily report</h1>
           <p className="subtle">
-            A clear summary for your crew and Earth. All readings are simulated.
+            Summary for flight surgeons and crew. Sourced from {activeDataset.title} ({activeDataset.source}).
           </p>
         </div>
 
@@ -332,10 +340,22 @@ function ReportsPage({
         <article className="report-card">
           <div className="report-title">
             <span className="report-number">04</span>
-            <h2>Static data</h2>
+            <h2>Dataset & environmental telemetry</h2>
           </div>
           <ReportLine
-            label="Radiation · Static sample data"
+            label="Active Mission Dataset"
+            value={activeDataset.title}
+          />
+          <ReportLine
+            label="Telemetry Source"
+            value={activeDataset.source}
+          />
+          <ReportLine
+            label="Sampling Protocol"
+            value={activeDataset.sampleFrequency}
+          />
+          <ReportLine
+            label="Radiation · Continuous dosimeter"
             value={`${radiationSamples[radiationSamples.length - 1].toFixed(1)} ${radiationUnit}`}
           />
           <p className="radiation-disclaimer">{radiationDisclaimer}</p>

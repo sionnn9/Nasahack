@@ -5,6 +5,7 @@ import './globals.css'
 export const metadata: Metadata = {
   title: 'CrewSignal — Mars Transit Health Companion',
   description: 'A calm, offline-first daily health companion for the Mars transit crew.',
+  manifest: '/manifest.json',
   generator: 'v0.app',
   icons: {
     icon: [

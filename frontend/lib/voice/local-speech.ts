@@ -1,9 +1,15 @@
+import {
+  isKokoroReady,
+  speakWithKokoro,
+  stopKokoroAudio,
+  KOKORO_DEFAULT_VOICE,
+} from "./kokoro-tts";
+
 /**
  * Spoken replies that never leave the device.
  *
- * Only voices with `localService === true` are used, which excludes the cloud
- * voices Chrome and Edge expose. If a device has no local voice the caller
- * shows text only and says so in the UI.
+ * Uses Kokoro-82M neural TTS ("am_adam") for natural human speech,
+ * with automatic fallback to high-clarity local system Web Speech voices.
  */
 
 export type SpeakResult = "spoke" | "unavailable" | "cancelled";
@@ -22,20 +28,78 @@ export function speechAvailable(): boolean {
   return synth() !== null && typeof window.SpeechSynthesisUtterance === "function";
 }
 
-/** Local voices only, English preferred, with fallback to any available system voice. */
-export function pickLocalVoice(): SpeechSynthesisVoice | null {
+/**
+ * Picks the best available clear male voice on the device (matching "Adam" persona).
+ * Specifically targets Windows, Edge, Chrome, and Mac male natural voices
+ * (e.g., Guy, Christopher, David, Mark, George, Daniel) and strictly excludes female voices.
+ */
+export function pickAdamVoice(): SpeechSynthesisVoice | null {
   const engine = synth();
   if (!engine) return null;
   const all = engine.getVoices();
   if (all.length === 0) return null;
-  const local = all.filter((voice) => voice.localService);
-  const candidates = local.length > 0 ? local : all;
-  return (
-    candidates.find((voice) => voice.lang.toLowerCase().startsWith("en")) ??
-    all.find((voice) => voice.lang.toLowerCase().startsWith("en")) ??
-    all[0] ??
-    null
+
+  const english = all.filter((v) => v.lang.toLowerCase().startsWith("en"));
+  const pool = english.length > 0 ? english : all;
+
+  // Strict female exclusions to avoid generic high-pitched default
+  const femaleKeywords = [
+    "zira",
+    "hazel",
+    "susan",
+    "jenny",
+    "aria",
+    "female",
+    "woman",
+    "girl",
+    "catherine",
+    "linda",
+    "eva",
+    "stephanie",
+    "samantha",
+    "victoria",
+    "karen",
+  ];
+
+  // Preferred deep/clear male voices in order of natural quality
+  const maleKeywords = [
+    "guy",
+    "christopher",
+    "david",
+    "mark",
+    "george",
+    "ryan",
+    "male",
+    "james",
+    "richard",
+    "oliver",
+    "daniel",
+    "charles",
+    "adam",
+  ];
+
+  // 1. Check for specific natural male voices
+  for (const kw of maleKeywords) {
+    const match = pool.find(
+      (v) =>
+        v.name.toLowerCase().includes(kw) &&
+        !femaleKeywords.some((f) => v.name.toLowerCase().includes(f)),
+    );
+    if (match) return match;
+  }
+
+  // 2. Fallback to any non-female voice
+  const nonFemale = pool.find(
+    (v) => !femaleKeywords.some((f) => v.name.toLowerCase().includes(f)),
   );
+  if (nonFemale) return nonFemale;
+
+  return pool[0] ?? null;
+}
+
+/** Local voices only, male preferred for Adam persona */
+export function pickLocalVoice(): SpeechSynthesisVoice | null {
+  return pickAdamVoice();
 }
 
 /**
@@ -43,7 +107,7 @@ export function pickLocalVoice(): SpeechSynthesisVoice | null {
  * a device has no local voice.
  */
 export function waitForLocalVoice(timeoutMs = 2000): Promise<SpeechSynthesisVoice | null> {
-  const immediate = pickLocalVoice();
+  const immediate = pickAdamVoice();
   if (immediate) return Promise.resolve(immediate);
   const engine = synth();
   if (!engine) return Promise.resolve(null);
@@ -55,10 +119,10 @@ export function waitForLocalVoice(timeoutMs = 2000): Promise<SpeechSynthesisVoic
       settled = true;
       window.clearTimeout(timer);
       engine.removeEventListener("voiceschanged", onChange);
-      resolve(pickLocalVoice());
+      resolve(pickAdamVoice());
     };
     const onChange = () => {
-      if (pickLocalVoice()) finish();
+      if (pickAdamVoice()) finish();
     };
     const timer = window.setTimeout(finish, timeoutMs);
     engine.addEventListener("voiceschanged", onChange);
@@ -68,13 +132,29 @@ export function waitForLocalVoice(timeoutMs = 2000): Promise<SpeechSynthesisVoic
 let sequence = 0;
 
 /**
- * Speaks one line and resolves when it finishes. Resolves "cancelled" when a
- * newer line interrupted it, so callers can ignore stale completions.
+ * Speaks one line and resolves when it finishes.
+ * Prefers Kokoro-82M neural model ("am_adam") and seamlessly falls back
+ * to local system speech synthesis. Resolves "cancelled" if user stops.
  */
 export async function speak(
   text: string,
-  options: { rate?: number; voice?: SpeechSynthesisVoice | null } = {},
+  options: { rate?: number; voice?: SpeechSynthesisVoice | null; kokoroVoice?: string } = {},
 ): Promise<SpeakResult> {
+  // Always stop prior speech first
+  stopSpeaking();
+
+  // 1. Try Kokoro Neural TTS ("am_adam") first if available
+  if (isKokoroReady()) {
+    const kokoroResult = await speakWithKokoro(text, {
+      voice: options.kokoroVoice || KOKORO_DEFAULT_VOICE,
+      speed: options.rate || 1.0,
+    });
+    if (kokoroResult === "spoke" || kokoroResult === "cancelled") {
+      return kokoroResult;
+    }
+  }
+
+  // 2. Fallback to System Speech Synthesis
   if (!speechAvailable()) return "unavailable";
   const engine = synth();
   const Utterance = (window as VoiceWindow).SpeechSynthesisUtterance;
@@ -93,8 +173,9 @@ export async function speak(
     } else {
       utterance.lang = "en-US";
     }
-    utterance.rate = options.rate ?? 1;
-    utterance.pitch = 1;
+    // Deep, calm, authoritative male resonance (Adam flight doctor profile)
+    utterance.pitch = 0.86;
+    utterance.rate = options.rate ?? 0.96;
 
     let settled = false;
     const finish = (result: SpeakResult) => {
@@ -110,6 +191,7 @@ export async function speak(
 }
 
 export function stopSpeaking(): void {
+  stopKokoroAudio();
   synth()?.cancel();
   sequence += 1;
 }

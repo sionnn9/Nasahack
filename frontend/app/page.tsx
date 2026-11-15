@@ -317,10 +317,12 @@ function App() {
             audioLevel: voice.audioLevel,
             micPermission: voice.micPermission,
             speechEngineType: voice.speechEngineType,
+            ttsVoice: voice.ttsVoice,
             clearLiveTranscript: voice.clearLiveTranscript,
             startListening: voice.startListening,
             toggleListening: voice.toggleListening,
             replayGuidance: voice.replayGuidance,
+            stopSpeaker: voice.stopSpeaker,
             onPresetSelect: voice.setManualInterpretation,
             onToggleActionStep: voice.toggleActionStep,
             onProcessText: voice.processTextInput,
@@ -349,6 +351,9 @@ function App() {
           wellbeingHistory={wellbeingHistory}
           supportRequested={supportRequested}
           timelineEvents={timelineEvents}
+          activityMode={simulation.activityMode}
+          activePhaseName={simulation.activePhaseName}
+          onActivityModeChange={simulation.setActivityMode}
           onThemeToggle={changeTheme}
           onSendEmergency={sendEmergency}
           onBack={back}

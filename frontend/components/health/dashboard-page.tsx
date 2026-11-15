@@ -1,11 +1,13 @@
 "use client";
 
+import { useState } from "react";
 import {
   Activity,
   ArrowLeft,
   Check,
   ChevronRight,
   Clock3,
+  Database,
   Moon,
   ShieldAlert,
   Sun,
@@ -31,6 +33,9 @@ import {
 import { AllReadings } from "./all-readings";
 import { ReadingDetails } from "./reading-details";
 import { BodyMap, LineChart } from "./visualizations";
+import { DatasetImportModal } from "./dataset-import-modal";
+import { getActiveAstronautDataset } from "@/lib/datasets/nasa-telemetry-datasets";
+import type { ActivityMode } from "./use-health-simulation";
 
 const areaDisplayLabels: Record<BodyArea, string> = {
   Head: "Mood/Sleep",
@@ -58,6 +63,8 @@ function DashboardPage({
   wellbeingHistory,
   supportRequested,
   timelineEvents,
+  activityMode = "auto",
+  activePhaseName = "Nominal Resting",
   onThemeToggle,
   onSendEmergency,
   onBack,
@@ -67,6 +74,7 @@ function DashboardPage({
   onSetPage,
   onHeadTabChange,
   onQualityOverrideChange,
+  onActivityModeChange,
   onRequestSupport,
 }: {
   astronaut: CrewMember;
@@ -84,6 +92,8 @@ function DashboardPage({
   wellbeingHistory: number[];
   supportRequested: boolean;
   timelineEvents: TimelineEvent[];
+  activityMode?: ActivityMode;
+  activePhaseName?: string;
   onThemeToggle: () => void;
   onSendEmergency: () => void;
   onBack: () => void;
@@ -93,8 +103,12 @@ function DashboardPage({
   onSetPage: (page: "daily" | "reports") => void;
   onHeadTabChange: (tab: "mood" | "sleep") => void;
   onQualityOverrideChange: (value: QualityOverride) => void;
+  onActivityModeChange?: (mode: ActivityMode) => void;
   onRequestSupport: () => void;
 }) {
+  const [showDatasetModal, setShowDatasetModal] = useState(false);
+  const activeDataset = getActiveAstronautDataset(astronaut.id);
+
   const isUsable = quality === "Usable";
   const bodyLabels: Partial<Record<BodyArea, string[]>> = {
     Head: [
@@ -187,14 +201,32 @@ function DashboardPage({
               <span className="status-chip">
                 <span className="live-dot" /> SYNCED LOCALLY
               </span>
+              <button
+                type="button"
+                className="dataset-eyebrow-pill"
+                onClick={() => setShowDatasetModal(true)}
+                title="Click to view or switch NASA telemetry dataset"
+              >
+                <Database size={11} />
+                <span>{activeDataset.datasetTitle.split(" ")[0]} Dataset</span>
+              </button>
             </div>
             <h1>Welcome, {astronaut.name.split(" ")[0]}</h1>
             <p className="subtle">
-              Your daily check-in, at a glance. Simulated readings.
+              Live astronaut telemetry driven by actual spaceflight datasets.
             </p>
           </div>
 
           <div className="welcome-actions">
+            <button
+              type="button"
+              className="dataset-action-btn"
+              onClick={() => setShowDatasetModal(true)}
+              title="Import or select actual NASA spaceflight telemetry dataset"
+            >
+              <Database size={15} />
+              <span>Import Dataset</span>
+            </button>
             <button className="secondary-button" onClick={onBeginSensorCheck}>
               <Activity />{" "}
               {checking ? "Checking sensors…" : "Check all sensors"}
@@ -220,8 +252,33 @@ function DashboardPage({
               {task}
             </span>
           ))}
+
+          <div className="activity-phase-selector" title="Simulate spaceflight operational phase">
+            <span className="activity-label">Activity:</span>
+            <div className="activity-btn-group">
+              {(
+                [
+                  { key: "auto", label: "Auto Cycle" },
+                  { key: "resting", label: "Rest" },
+                  { key: "active", label: "Station Duty" },
+                  { key: "exercise", label: "Workout" },
+                  { key: "recovery", label: "Recovery" },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.key}
+                  type="button"
+                  className={`activity-mode-btn ${activityMode === opt.key ? "active" : ""}`}
+                  onClick={() => onActivityModeChange?.(opt.key)}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <label className="simulator-control">
-            Simulate
+            Sensor
             <select
               value={qualityOverride}
               onChange={(event) => {
@@ -320,6 +377,7 @@ function DashboardPage({
                 <span className="metric-dot coral-dot" />
                 <b>Heart rate</b>
                 <span className="chart-source">Live sensor · bpm</span>
+                <span className="chart-phase-chip">{activePhaseName}</span>
               </div>
               <b className="timeline-current">
                 {isUsable ? `${vitals.heartRate} bpm` : "No valid reading"}
@@ -339,8 +397,7 @@ function DashboardPage({
               </div>
             </div>
             <p className="chart-alt">
-              Recent sample range: {currentRange}. Unusable readings appear as
-              gaps. Source: Live sensor.
+              Observed in recent 60s: <b>{currentRange}</b> · Clinical nominal zone: <b>60–100 bpm</b> · Aerobic countermeasure: <b>120–165 bpm</b>. Source: Live telemetry.
             </p>
             {astronaut.id === "alex-morgan" && (
               <p className="quality-event">
@@ -361,6 +418,13 @@ function DashboardPage({
           onSelectArea={onSelectArea}
           onHeadTabChange={onHeadTabChange}
           onRequestSupport={onRequestSupport}
+        />
+
+        <DatasetImportModal
+          isOpen={showDatasetModal}
+          onClose={() => setShowDatasetModal(false)}
+          astronaut={astronaut}
+          onDatasetChanged={() => {}}
         />
       </section>
     </>

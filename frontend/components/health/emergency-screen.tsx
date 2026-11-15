@@ -20,6 +20,7 @@ import {
   Trash2,
   User,
   Volume2,
+  VolumeX,
   Wind,
   X,
   Zap,
@@ -53,6 +54,7 @@ interface EmergencyScreenProps {
     audioLevel?: number;
     micPermission?: "prompt" | "granted" | "denied";
     speechEngineType?: "Web Speech API" | "Vosk Offline" | "None";
+    ttsVoice?: string;
     clearLiveTranscript?: () => void;
     languageCode: string;
     languages: { code: string; label: string; modelSizeLabel: string }[];
@@ -65,6 +67,7 @@ interface EmergencyScreenProps {
     stopListening?: () => void;
     toggleListening?: () => void;
     replayGuidance?: () => void;
+    stopSpeaker?: () => void;
     onPresetSelect?: (category: EmergencyCategory) => void;
     onToggleActionStep?: (stepId: string) => void;
     onProcessText?: (text: string) => void;
@@ -208,6 +211,17 @@ export function EmergencyScreen({
             </span>
           </div>
 
+          {/* PERMANENT STOP SPEAKER BUTTON IN HEADER */}
+          <button
+            type="button"
+            className={`header-stop-speaker-btn ${isSpeaking ? "is-speaking-active" : ""}`}
+            onClick={voice.stopSpeaker}
+            title="Silence audio speaker output immediately"
+          >
+            <VolumeX size={16} />
+            <span>STOP SPEAKER</span>
+          </button>
+
           {/* Mic Toggle Button */}
           <button
             type="button"
@@ -222,6 +236,32 @@ export function EmergencyScreen({
 
       {/* MAIN SINGLE-COLUMN CONTENT */}
       <div className="emergency-single-column">
+        {/* =========================================================================
+            BIG STOP SPEAKER BANNER (Prominently displayed whenever speaker is active)
+           ========================================================================= */}
+        {isSpeaking && (
+          <div className="big-speaker-alert-card">
+            <div className="speaker-alert-left">
+              <div className="soundwave-pulse-ring">
+                <Volume2 size={26} className="pulsing-speaker-icon" />
+              </div>
+              <div className="speaker-alert-text">
+                <span className="speaker-alert-headline">ASSISTANT IS SPEAKING ADVICE ALOUD</span>
+                <span className="speaker-alert-subtext">Tap the big button to immediately stop and silence speech</span>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="giant-stop-speaker-btn"
+              onClick={voice.stopSpeaker}
+              title="Stop and silence the speaker immediately"
+            >
+              <VolumeX size={22} />
+              <span>STOP SPEAKER</span>
+            </button>
+          </div>
+        )}
+
         {/* Banner to re-open pop-up if dismissed */}
         {interpretation && !showModal && (
           <div className="reopen-modal-banner" onClick={() => setShowModal(true)}>
@@ -278,7 +318,7 @@ export function EmergencyScreen({
 
             {/* Engine Pill */}
             <div className="engine-tag">
-              {voice.speechEngineType || "Speech Engine"} · Mic {voice.micPermission || "Active"}
+              {voice.speechEngineType || "On-Device Engine"} · Voice: {voice.ttsVoice || "Adam Male"}
             </div>
           </div>
 
@@ -342,6 +382,17 @@ export function EmergencyScreen({
               >
                 <Sparkles size={14} />
                 <span>Done Speaking · Stop Mic & Get Advice</span>
+              </button>
+
+              {/* PERMANENT STOP SPEAKER BUTTON IN LIVE MONITOR */}
+              <button
+                type="button"
+                className={`monitor-stop-speaker-btn ${isSpeaking ? "is-speaking pulsing" : ""}`}
+                onClick={voice.stopSpeaker}
+                title="Silence speech audio immediately"
+              >
+                <VolumeX size={15} />
+                <span>STOP SPEAKER</span>
               </button>
 
               <span className="silence-hint">
@@ -595,23 +646,36 @@ export function EmergencyScreen({
             )}
 
             {/* Spoken Guidance Box (Only speaks this!) */}
-            <div className="spoken-guidance-box">
+            <div className={`spoken-guidance-box ${isSpeaking ? "is-speaking" : ""}`}>
               <div className="guidance-top">
                 <div className="guidance-label">
                   <Sparkles size={14} className="text-cyan-400" />
-                  <span>SPOKEN FIRST-AID GUIDANCE FOR ASTRONAUTS</span>
+                  <span>SPOKEN FIRST-AID GUIDANCE</span>
                 </div>
+              </div>
+              <p className="guidance-text">“{interpretation.spokenSummary}”</p>
+
+              {/* Single dedicated audio control bar */}
+              <div className="modal-speaking-alert-strip">
                 <button
                   type="button"
-                  className="replay-speech-btn"
-                  onClick={voice.replayGuidance}
-                  title="Replay spoken recommendations"
+                  className={`big-modal-stop-btn ${isSpeaking ? "pulsing" : ""}`}
+                  onClick={voice.stopSpeaker}
+                  title="Silence speech audio immediately"
                 >
-                  <Volume2 size={15} />
+                  <VolumeX size={18} />
+                  <span>STOP SPEAKER</span>
+                </button>
+                <button
+                  type="button"
+                  className="modal-replay-alt-btn"
+                  onClick={voice.replayGuidance}
+                  title="Play audio advice again"
+                >
+                  <Volume2 size={16} />
                   <span>Replay Audio</span>
                 </button>
               </div>
-              <p className="guidance-text">“{interpretation.spokenSummary}”</p>
             </div>
 
             {/* Actionable Suggestions Checklist ("What to do right now") */}

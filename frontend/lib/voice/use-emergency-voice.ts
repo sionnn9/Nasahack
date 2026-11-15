@@ -20,6 +20,7 @@ import {
   stopSpeaking,
   waitForLocalVoice,
 } from "./local-speech";
+import { initKokoroTTS, isKokoroReady } from "./kokoro-tts";
 import { OnDeviceModel, type ModelStatus } from "./on-device-model";
 import { EmergencyVoiceEngine, VoiceError } from "./vosk-engine";
 
@@ -172,6 +173,7 @@ export function useEmergencyVoice(callbacks: VoiceCallbacks) {
   const [modelProgress, setModelProgress] = useState("");
   const [interpretation, setInterpretation] =
     useState<EmergencyInterpretation | null>(null);
+  const [kokoroReady, setKokoroReady] = useState(false);
   const [isBroadcastingAlarm, setIsBroadcastingAlarm] = useState(false);
   const [isGroundLinkActive, setIsGroundLinkActive] = useState(false);
 
@@ -186,6 +188,7 @@ export function useEmergencyVoice(callbacks: VoiceCallbacks) {
   const voiceRef = useRef<SpeechSynthesisVoice | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
   const animFrameRef = useRef<number | null>(null);
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastProcessedRef = useRef<string>("");
@@ -216,8 +219,13 @@ export function useEmergencyVoice(callbacks: VoiceCallbacks) {
     };
   }, [language]);
 
-  // Background initialization of optional on-device model
+  // Background initialization of optional on-device model & Kokoro neural voice
   useEffect(() => {
+    // 1. Kick off Kokoro TTS ("am_adam") neural voice preload
+    void initKokoroTTS().then((ok) => {
+      setKokoroReady(ok && isKokoroReady());
+    });
+
     const model = new OnDeviceModel();
     modelRef.current = model;
     const start = () => {
@@ -280,32 +288,10 @@ export function useEmergencyVoice(callbacks: VoiceCallbacks) {
         // Ignore
       }
       audioContextRef.current = null;
+      analyserRef.current = null;
       engineRef.current?.dispose();
       engineRef.current = null;
     };
-  }, []);
-
-  // Stop listening completely (stops mic hardware and speech recognition)
-  const stopListening = useCallback(() => {
-    stoppedRef.current = true;
-    startedRef.current = false;
-    stopSpeaking();
-
-    if (silenceTimerRef.current) {
-      clearTimeout(silenceTimerRef.current);
-    }
-
-    if (webSpeechRef.current) {
-      try {
-        webSpeechRef.current.stop();
-      } catch {
-        // Ignore
-      }
-    }
-    engineRef.current?.setMicrophoneEnabled(false);
-    setAudioLevel(0);
-    setStatus("idle");
-    setNote("Microphone stopped.");
   }, []);
 
   // Speak aloud ONLY the actionable suggestion
@@ -313,13 +299,14 @@ export function useEmergencyVoice(callbacks: VoiceCallbacks) {
     if (!text.trim()) return;
     setStatus("speaking");
 
-    // Ensure mic is stopped while speaking
+    // Ensure speech recognition is stopped while speaking
     if (webSpeechRef.current) {
       try {
-        webSpeechRef.current.stop();
+        webSpeechRef.current.abort();
       } catch {
         // Ignore
       }
+      webSpeechRef.current = null;
     }
     engineRef.current?.setMicrophoneEnabled(false);
     setAudioLevel(0);
@@ -355,10 +342,16 @@ export function useEmergencyVoice(callbacks: VoiceCallbacks) {
       }
       if (webSpeechRef.current) {
         try {
-          webSpeechRef.current.stop();
+          webSpeechRef.current.abort();
         } catch {
           // Ignore
         }
+        webSpeechRef.current = null;
+      }
+      if (micStreamRef.current) {
+        micStreamRef.current.getAudioTracks().forEach((track) => {
+          track.enabled = false;
+        });
       }
       engineRef.current?.setMicrophoneEnabled(false);
       setAudioLevel(0);
@@ -398,62 +391,192 @@ export function useEmergencyVoice(callbacks: VoiceCallbacks) {
     [speakAdvice],
   );
 
-  // Setup real-time audio volume visualizer from microphone stream
-  const setupAudioMeter = useCallback((stream: MediaStream) => {
-    try {
-      const AudioCtxClass =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext: typeof AudioContext })
-          .webkitAudioContext;
-      if (!AudioCtxClass) return;
+  // Setup/restart the real-time audio volume visualizer loop
+  const startVolumeMeter = useCallback(() => {
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = null;
+    }
+    const analyser = analyserRef.current;
+    const ctx = audioContextRef.current;
+    if (!analyser || !ctx) return;
 
-      const ctx = new AudioCtxClass();
-      audioContextRef.current = ctx;
+    if (ctx.state === "suspended") {
+      void ctx.resume();
+    }
 
-      // Resume context if suspended by browser autoplay policy
+    const buffer = new Uint8Array(analyser.fftSize);
+
+    const checkVolume = () => {
+      if (stoppedRef.current) {
+        setAudioLevel(0);
+        return;
+      }
       if (ctx.state === "suspended") {
         void ctx.resume();
       }
 
-      const source = ctx.createMediaStreamSource(stream);
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.3;
+      analyser.getByteTimeDomainData(buffer);
+      let sum = 0;
+      for (let i = 0; i < buffer.length; i++) {
+        const dev = Math.abs(buffer[i] - 128);
+        sum += dev;
+      }
+      const avg = sum / buffer.length;
+      // Amplify average deviation to make volume meter sensitive to human voice (10-100%)
+      const normalized = Math.min(100, Math.round(avg * 3.5));
+      setAudioLevel(normalized);
 
-      // Connect to a muted gain node connected to destination to force Chrome to process audio graph
-      const muteGain = ctx.createGain();
-      muteGain.gain.setValueAtTime(0, ctx.currentTime);
+      animFrameRef.current = requestAnimationFrame(checkVolume);
+    };
 
-      source.connect(analyser);
-      analyser.connect(muteGain);
-      muteGain.connect(ctx.destination);
+    animFrameRef.current = requestAnimationFrame(checkVolume);
+  }, []);
 
-      const buffer = new Uint8Array(analyser.fftSize);
+  // Start fresh Web Speech API recognition session
+  const startWebSpeech = useCallback(() => {
+    const WebSpeech = getWebSpeechConstructor();
+    if (!WebSpeech) return false;
 
-      const checkVolume = () => {
-        if (stoppedRef.current) return;
+    // Tear down any stale instance before creating a fresh one
+    if (webSpeechRef.current) {
+      try {
+        webSpeechRef.current.abort();
+      } catch {
+        // Ignore
+      }
+      webSpeechRef.current = null;
+    }
+
+    try {
+      const recognition = new WebSpeech();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = "en-US";
+      recognition.maxAlternatives = 1;
+
+      recognition.onstart = () => {
+        setStatus("listening");
+        setSpeechEngineType("Web Speech API");
+        setNote("Microphone live · speak emergency description now.");
+      };
+
+      recognition.onresult = (event: unknown) => {
+        type SpeechEvent = {
+          resultIndex: number;
+          results: Array<Array<{ transcript: string }> & { isFinal?: boolean }>;
+        };
+        const speechEvent = event as SpeechEvent;
+        let finalAccumulator = "";
+        let interimAccumulator = "";
+
+        for (let i = 0; i < speechEvent.results.length; ++i) {
+          const piece = speechEvent.results[i][0]?.transcript || "";
+          if (speechEvent.results[i].isFinal) {
+            finalAccumulator += piece + " ";
+          } else {
+            interimAccumulator += piece;
+          }
+        }
+
+        const currentSpokenText = (finalAccumulator + interimAccumulator).trim();
+
+        if (currentSpokenText) {
+          setLiveTranscript(currentSpokenText);
+          setInterimTranscript(interimAccumulator);
+
+          const preview = interpretEmergency(
+            currentSpokenText,
+            interpretationRef.current?.affectedCrewName,
+          );
+          setInterpretation(preview);
+        }
+
+        // Reset silence timer on each word spoken
+        if (silenceTimerRef.current) {
+          clearTimeout(silenceTimerRef.current);
+        }
+
+        // Auto-finalize after 2500ms of sustained silence and substantial phrase
+        silenceTimerRef.current = setTimeout(() => {
+          const trimmed = currentSpokenText.trim();
+          const words = trimmed.split(/\s+/).filter(Boolean);
+          const hasSubstance = words.length >= 3 || trimmed.length >= 14;
+
+          if (hasSubstance && trimmed !== lastProcessedRef.current) {
+            lastProcessedRef.current = trimmed;
+            void handleFinalSpeech(trimmed);
+          }
+        }, 2500);
+      };
+
+      recognition.onerror = (event: unknown) => {
+        const err = event as { error?: string };
+        if (err.error === "no-speech") return;
+        if (err.error === "not-allowed") {
+          setStatus("unavailable");
+          setMicPermission("denied");
+          setNote("Microphone permission denied. Tap buttons below or type.");
+        }
+      };
+
+      recognition.onend = () => {
+        // Only restart if not explicitly stopped or muted
+        if (!stoppedRef.current && startedRef.current) {
+          try {
+            recognition.start();
+          } catch {
+            // Ignore restart error
+          }
+        }
+      };
+
+      webSpeechRef.current = recognition;
+      recognition.start();
+      return true;
+    } catch (e) {
+      console.warn("startWebSpeech failed:", e);
+      return false;
+    }
+  }, [handleFinalSpeech]);
+
+  // Setup AudioContext & AnalyserNode from MediaStream
+  const setupAudioGraph = useCallback(
+    (stream: MediaStream) => {
+      try {
+        const AudioCtxClass =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext })
+            .webkitAudioContext;
+        if (!AudioCtxClass) return;
+
+        const ctx = audioContextRef.current ?? new AudioCtxClass();
+        audioContextRef.current = ctx;
+
         if (ctx.state === "suspended") {
           void ctx.resume();
         }
 
-        analyser.getByteTimeDomainData(buffer);
-        let sum = 0;
-        for (let i = 0; i < buffer.length; i++) {
-          const dev = Math.abs(buffer[i] - 128);
-          sum += dev;
-        }
-        const avg = sum / buffer.length;
-        // Amplify average deviation to make volume meter sensitive to human voice (10-100%)
-        const normalized = Math.min(100, Math.round(avg * 3.5));
-        setAudioLevel(normalized);
+        const source = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.3;
+        analyserRef.current = analyser;
 
-        animFrameRef.current = requestAnimationFrame(checkVolume);
-      };
-      checkVolume();
-    } catch (e) {
-      console.warn("Audio meter setup error:", e);
-    }
-  }, []);
+        const muteGain = ctx.createGain();
+        muteGain.gain.setValueAtTime(0, ctx.currentTime);
+
+        source.connect(analyser);
+        analyser.connect(muteGain);
+        muteGain.connect(ctx.destination);
+
+        startVolumeMeter();
+      } catch (e) {
+        console.warn("Audio graph setup error:", e);
+      }
+    },
+    [startVolumeMeter],
+  );
 
   // Initialize Microphone Hardware & Speech Recognition
   const initMicrophoneAndEngines = useCallback(async () => {
@@ -473,8 +596,8 @@ export function useEmergencyVoice(callbacks: VoiceCallbacks) {
     }
 
     // Step 1: Open hardware microphone stream
-    let stream: MediaStream | null = null;
-    if (typeof navigator !== "undefined" && navigator.mediaDevices?.getUserMedia) {
+    let stream: MediaStream | null = micStreamRef.current;
+    if (!stream && typeof navigator !== "undefined" && navigator.mediaDevices?.getUserMedia) {
       try {
         stream = await navigator.mediaDevices.getUserMedia({
           audio: {
@@ -486,116 +609,23 @@ export function useEmergencyVoice(callbacks: VoiceCallbacks) {
         });
         micStreamRef.current = stream;
         setMicPermission("granted");
-        setupAudioMeter(stream);
+        setupAudioGraph(stream);
       } catch (err) {
         console.warn("getUserMedia failed or denied:", err);
         setMicPermission("denied");
         setNote("Microphone access denied. Please click Allow or use buttons.");
       }
+    } else if (stream) {
+      stream.getAudioTracks().forEach((track) => {
+        track.enabled = true;
+      });
+      startVolumeMeter();
     }
 
     // Step 2: Initialize Web Speech API if supported
-    const WebSpeech = getWebSpeechConstructor();
-
-    if (WebSpeech) {
-      try {
-        const recognition = new WebSpeech();
-        recognition.continuous = true;
-        recognition.interimResults = true;
-        recognition.lang = "en-US";
-        recognition.maxAlternatives = 1;
-
-        recognition.onstart = () => {
-          setStatus("listening");
-          setSpeechEngineType("Web Speech API");
-          setNote("Microphone live · describe what happened.");
-        };
-
-        recognition.onresult = (event: unknown) => {
-          type SpeechEvent = {
-            resultIndex: number;
-            results: Array<Array<{ transcript: string }> & { isFinal?: boolean }>;
-          };
-          const speechEvent = event as SpeechEvent;
-          let finalAccumulator = "";
-          let interimAccumulator = "";
-
-          for (let i = 0; i < speechEvent.results.length; ++i) {
-            const piece = speechEvent.results[i][0]?.transcript || "";
-            if (speechEvent.results[i].isFinal) {
-              finalAccumulator += piece + " ";
-            } else {
-              interimAccumulator += piece;
-            }
-          }
-
-          const currentSpokenText = (finalAccumulator + interimAccumulator).trim();
-
-          if (currentSpokenText) {
-            setLiveTranscript(currentSpokenText);
-            setInterimTranscript(interimAccumulator);
-
-            // Update visual preview in real time without speaking
-            const preview = interpretEmergency(
-              currentSpokenText,
-              interpretationRef.current?.affectedCrewName,
-            );
-            setInterpretation(preview);
-          }
-
-          // Reset silence timer on each word spoken
-          if (silenceTimerRef.current) {
-            clearTimeout(silenceTimerRef.current);
-          }
-
-          // Auto-finalize after 2500ms of sustained silence and substantial phrase
-          silenceTimerRef.current = setTimeout(() => {
-            const trimmed = currentSpokenText.trim();
-            const words = trimmed.split(/\s+/).filter(Boolean);
-
-            const hasSubstance = words.length >= 3 || trimmed.length >= 14;
-
-            if (
-              hasSubstance &&
-              trimmed !== lastProcessedRef.current
-            ) {
-              lastProcessedRef.current = trimmed;
-              void handleFinalSpeech(trimmed);
-            }
-          }, 2500);
-        };
-
-        recognition.onerror = (event: unknown) => {
-          const err = event as { error?: string };
-          console.warn("Speech recognition error:", err.error);
-          if (err.error === "no-speech") return;
-          if (err.error === "not-allowed") {
-            setStatus("unavailable");
-            setMicPermission("denied");
-            setNote("Microphone permission denied. Tap buttons below or type.");
-          }
-        };
-
-        recognition.onend = () => {
-          if (!stoppedRef.current && startedRef.current) {
-            try {
-              recognition.start();
-            } catch {
-              // Ignore restart error
-            }
-          }
-        };
-
-        webSpeechRef.current = recognition;
-        try {
-          recognition.start();
-        } catch {
-          // Ignore start error
-        }
-        return;
-      } catch (e) {
-        console.warn("WebSpeech init error:", e);
-      }
+    const webSpeechStarted = startWebSpeech();
+    if (webSpeechStarted) {
+      return;
     }
 
     // Step 3: Fallback to local Vosk WASM Engine if Web Speech is not present
@@ -652,36 +682,84 @@ export function useEmergencyVoice(callbacks: VoiceCallbacks) {
     setCached(ready);
     setStatus("listening");
     engine.start();
-  }, [handleFinalSpeech, setupAudioMeter]);
+  }, [handleFinalSpeech, setupAudioGraph, startVolumeMeter, startWebSpeech]);
 
   // Invoked when user gestures from Emergency button
   const beginFromGesture = useCallback(() => {
     void initMicrophoneAndEngines();
   }, [initMicrophoneAndEngines]);
 
+  // Stop listening completely (MUTE) - disables tracks and tears down recognition session
+  const stopListening = useCallback(() => {
+    stoppedRef.current = true;
+    startedRef.current = false;
+    stopSpeaking();
+
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+    }
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = null;
+    }
+
+    // Disable microphone audio track
+    if (micStreamRef.current) {
+      micStreamRef.current.getAudioTracks().forEach((track) => {
+        track.enabled = false;
+      });
+    }
+
+    // Abort speech recognition and discard dead instance
+    if (webSpeechRef.current) {
+      try {
+        webSpeechRef.current.abort();
+      } catch {
+        // Ignore
+      }
+      webSpeechRef.current = null;
+    }
+
+    engineRef.current?.setMicrophoneEnabled(false);
+    setAudioLevel(0);
+    setStatus("idle");
+    setNote("Microphone muted.");
+  }, []);
+
+  // Start listening (UNMUTE) - enables tracks, resumes AudioContext, creates fresh SpeechRecognition
   const startListening = useCallback(async () => {
     stoppedRef.current = false;
     startedRef.current = true;
     setStatus("listening");
     setNote("Listening for your voice...");
 
-    if (!micStreamRef.current || !webSpeechRef.current) {
-      await initMicrophoneAndEngines();
-    } else {
-      if (audioContextRef.current && audioContextRef.current.state === "suspended") {
-        void audioContextRef.current.resume();
-      }
-      if (webSpeechRef.current) {
-        try {
-          webSpeechRef.current.start();
-        } catch {
-          // Already running
-        }
-      }
-      engineRef.current?.setMicrophoneEnabled(true);
+    // 1. Enable microphone tracks
+    if (micStreamRef.current) {
+      micStreamRef.current.getAudioTracks().forEach((track) => {
+        track.enabled = true;
+      });
     }
-  }, [initMicrophoneAndEngines]);
 
+    // 2. Resume audio context & restart volume visualizer
+    if (audioContextRef.current && audioContextRef.current.state === "suspended") {
+      void audioContextRef.current.resume();
+    }
+    if (analyserRef.current) {
+      startVolumeMeter();
+    }
+
+    // 3. Start a fresh Web Speech recognition instance
+    const speechStarted = startWebSpeech();
+
+    // 4. Fallback or complete init if stream was missing
+    if (!speechStarted && engineRef.current) {
+      engineRef.current.setMicrophoneEnabled(true);
+    } else if (!speechStarted && !micStreamRef.current) {
+      await initMicrophoneAndEngines();
+    }
+  }, [initMicrophoneAndEngines, startVolumeMeter, startWebSpeech]);
+
+  // Toggle between Muted (stopped) and Unmuted (listening)
   const toggleListening = useCallback(() => {
     if (status === "listening" || status === "speaking") {
       stopListening();
@@ -695,6 +773,12 @@ export function useEmergencyVoice(callbacks: VoiceCallbacks) {
       void speakAdvice(interpretation.spokenSummary);
     }
   }, [interpretation?.spokenSummary, speakAdvice]);
+
+  const stopSpeaker = useCallback(() => {
+    stopSpeaking();
+    setStatus("idle");
+    setNote("Audio guidance silenced.");
+  }, []);
 
   const setManualInterpretation = useCallback(
     (category: EmergencyCategory) => {
@@ -791,6 +875,9 @@ export function useEmergencyVoice(callbacks: VoiceCallbacks) {
     interpretation,
     isListening: status === "listening",
     isSpeaking: status === "speaking",
+    ttsVoice: voiceRef.current?.name
+      ? `Adam (${voiceRef.current.name.split("-")[0].trim()})`
+      : "Adam (Calm Male Voice)",
     isBroadcastingAlarm,
     isGroundLinkActive,
     beginFromGesture,
@@ -799,6 +886,7 @@ export function useEmergencyVoice(callbacks: VoiceCallbacks) {
     stopListening,
     toggleListening,
     replayGuidance,
+    stopSpeaker,
     setManualInterpretation,
     toggleActionStep,
     processTextInput,

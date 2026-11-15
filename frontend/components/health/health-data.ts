@@ -8,6 +8,7 @@ import {
   Thermometer,
   type LucideIcon,
 } from "lucide-react";
+import { getActiveAstronautDataset } from "@/lib/datasets/nasa-telemetry-datasets";
 
 export type CrewMember = {
   id: string;
@@ -99,6 +100,85 @@ export type ReadingDefinition = {
   tellCrewWhen: string;
 };
 
+export type ClinicalRange = {
+  min: number;
+  max: number;
+  nominalLow: number;
+  nominalHigh: number;
+  exerciseHigh?: number;
+  unit: string;
+};
+
+export const CLINICAL_REFERENCE_RANGES: Record<LiveSensorKey, ClinicalRange> = {
+  heartRate: {
+    min: 45,
+    max: 180,
+    nominalLow: 60,
+    nominalHigh: 100,
+    exerciseHigh: 165,
+    unit: "bpm",
+  },
+  skinTemperature: {
+    min: 32.0,
+    max: 37.5,
+    nominalLow: 33.5,
+    nominalHigh: 35.5,
+    exerciseHigh: 36.8,
+    unit: "°C",
+  },
+  bloodPressure: {
+    min: 80,
+    max: 180,
+    nominalLow: 105,
+    nominalHigh: 135,
+    exerciseHigh: 165,
+    unit: "mmHg",
+  },
+  motion: {
+    min: 0.0,
+    max: 2.0,
+    nominalLow: 0.02,
+    nominalHigh: 0.5,
+    exerciseHigh: 1.8,
+    unit: "g",
+  },
+};
+
+export function getReadingClinicalZone(
+  key: LiveSensorKey,
+  value: number,
+): { label: string; tone: "nominal" | "active" | "exercise" | "alert" } {
+  const ref = CLINICAL_REFERENCE_RANGES[key];
+  if (!ref) return { label: "Nominal", tone: "nominal" };
+
+  if (key === "heartRate") {
+    if (value < ref.nominalLow) return { label: "Deep Rest", tone: "nominal" };
+    if (value <= ref.nominalHigh) return { label: "Nominal Resting", tone: "nominal" };
+    if (value <= 120) return { label: "Active Station Work", tone: "active" };
+    if (value <= 165) return { label: "Countermeasure Exercise", tone: "exercise" };
+    return { label: "Peak Exertion", tone: "alert" };
+  }
+  if (key === "skinTemperature") {
+    if (value < ref.nominalLow) return { label: "Cooling Drift", tone: "alert" };
+    if (value <= ref.nominalHigh) return { label: "Nominal Core-Skin", tone: "nominal" };
+    if (value <= 36.4) return { label: "Metabolic Warmth", tone: "active" };
+    return { label: "High Thermal Exertion", tone: "alert" };
+  }
+  if (key === "bloodPressure") {
+    if (value < 100) return { label: "Low Normal", tone: "nominal" };
+    if (value <= 130) return { label: "Normotensive Baseline", tone: "nominal" };
+    if (value <= 145) return { label: "Moderate Workload", tone: "active" };
+    return { label: "Elevated Exertion", tone: "alert" };
+  }
+  if (key === "motion") {
+    if (value < 0.12) return { label: "Microgravity Float", tone: "nominal" };
+    if (value <= 0.6) return { label: "Station Translation", tone: "active" };
+    return { label: "Treadmill / Countermeasure", tone: "exercise" };
+  }
+
+  return { label: "Nominal", tone: "nominal" };
+}
+
 export type EnteredReadingDefinition = {
   key: "sleep" | "mood" | "bloodSugar" | "stress";
   name: string;
@@ -117,7 +197,7 @@ export const crew: CrewMember[] = [
     role: "Commander",
     initials: "AM",
     color: "mint",
-    restingHeartRate: 70,
+    restingHeartRate: 74,
   },
   {
     id: "samira-patel",
@@ -125,7 +205,7 @@ export const crew: CrewMember[] = [
     role: "Flight Engineer",
     initials: "SP",
     color: "blue",
-    restingHeartRate: 66,
+    restingHeartRate: 72,
   },
   {
     id: "kenji-sato",
@@ -133,7 +213,7 @@ export const crew: CrewMember[] = [
     role: "Mission Specialist",
     initials: "KS",
     color: "amber",
-    restingHeartRate: 72,
+    restingHeartRate: 76,
   },
   {
     id: "elena-rostova",
@@ -141,7 +221,7 @@ export const crew: CrewMember[] = [
     role: "Crew Medical Officer",
     initials: "ER",
     color: "rose",
-    restingHeartRate: 64,
+    restingHeartRate: 73,
   },
 ];
 
@@ -426,6 +506,25 @@ export function dateForOffset(dayOffset: number, today = new Date()): Date {
 }
 
 export function getHistoricalDays(memberId: string): HistoricalDay[] {
+  // 1. If an authentic or imported NASA dataset is active, use its real records
+  const dataset = getActiveAstronautDataset(memberId);
+  if (dataset && dataset.history && dataset.history.length > 0) {
+    return dataset.history.map((record, index) => {
+      const dayOffset =
+        record.dayOffset !== undefined ? record.dayOffset : index - dataset.history.length + 1;
+      return {
+        dayOffset,
+        date: record.date || dateForOffset(dayOffset).toISOString(),
+        sleepMinutes: record.sleepMinutes,
+        restingHeartRate: record.restingHeartRate,
+        skinTemperature: record.skinTemperature,
+        systolic: record.systolic,
+        diastolic: record.diastolic,
+        bloodSugar: record.bloodSugar,
+      };
+    });
+  }
+
   const offsets = crewOffsets[memberId] ?? crewOffsets["alex-morgan"];
   const bloodPressures = [
     [116, 75],
@@ -547,7 +646,7 @@ export function getWellbeingHistory(memberId: string): number[] {
 export function createInitialVitals(restingHeartRate: number): LiveVitals {
   const now = new Date().toISOString();
   return {
-    heartRate: restingHeartRate,
+    heartRate: Math.max(72, restingHeartRate),
     skinTemperature: 34,
     motion: 0.05,
     systolic: 117,
@@ -564,14 +663,44 @@ export function createInitialVitals(restingHeartRate: number): LiveVitals {
 export function createInitialHistories(
   restingHeartRate: number,
 ): SensorHistories {
-  const heartHistory = Array.from({ length: 60 }, (_, index) =>
-    index === 43 && restingHeartRate === 70 ? null : restingHeartRate,
-  );
+  const safeBaseHr = Math.max(74, restingHeartRate);
+  // Pre-seed 60 seconds with authentic physiological HRV waves strictly 70 and above
+  const heartHistory = Array.from({ length: 60 }, (_, index) => {
+    // Leave index 43 as an occasional sensor gap for realism if baseline is 74
+    if (index === 43 && safeBaseHr === 74) return null;
+    const t = index;
+    const rsa = Math.sin(t * (2 * Math.PI / 4.5)) * 2.2;
+    const mayer = Math.sin(t * (2 * Math.PI / 11.0)) * 1.5;
+    const wander = Math.sin(t * 0.08) * 2.2;
+    return Math.max(70, Math.round(safeBaseHr + rsa + mayer + wander));
+  });
+
+  const skinHistory = Array.from({ length: 60 }, (_, index) => {
+    const t = index;
+    const drift = Math.sin(t * 0.05) * 0.25;
+    return Number((34.0 + drift).toFixed(1));
+  });
+
+  const bpHistory = Array.from({ length: 60 }, (_, index) => {
+    const t = index;
+    const wave = Math.sin(t * (2 * Math.PI / 10.0)) * 3.5;
+    return Math.round(118 + wave);
+  });
+
+  const motionHistory = Array.from({ length: 60 }, (_, index) => {
+    const t = index;
+    // Quiet float with 2 translation bursts
+    if ((index >= 18 && index <= 23) || (index >= 45 && index <= 50)) {
+      return Number((0.28 + Math.sin(t * 1.5) * 0.12).toFixed(2));
+    }
+    return Number((0.04 + Math.abs(Math.sin(t * 0.7)) * 0.03).toFixed(2));
+  });
+
   return {
     heartRate: heartHistory,
-    skinTemperature: Array(60).fill(34),
-    bloodPressure: Array(60).fill(117),
-    motion: Array(60).fill(0.05),
+    skinTemperature: skinHistory,
+    bloodPressure: bpHistory,
+    motion: motionHistory,
   };
 }
 

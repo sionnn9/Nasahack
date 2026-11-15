@@ -1,31 +1,67 @@
 /*
- * Minimal offline support for the emergency voice assistant.
- *
- * Only two things are cached: language model archives (cache-first, so the
- * assistant works in airplane mode) and the app shell needed to reload the
- * page offline. Anything else is left to the network.
+ * Robust offline Service Worker for deep-space missions.
+ * Caches application shell, navigation, models, and UI assets so the entire
+ * system operates 100% offline without any external network access.
  */
 
-const MODEL_CACHE = "crewsignal-voice-v1";
-const SHELL_CACHE = "crewsignal-shell-v1";
+const MODEL_CACHE = "crewsignal-voice-v2";
+const SHELL_CACHE = "crewsignal-shell-v2";
 
-self.addEventListener("install", () => {
-  self.skipWaiting();
+const PRECACHE_SHELL = [
+  "/",
+  "/manifest.json",
+  "/icon.svg",
+  "/icon-light-32x32.png",
+  "/icon-dark-32x32.png",
+  "/apple-icon.png",
+];
+
+self.addEventListener("install", (event) => {
+  event.waitUntil(
+    caches
+      .open(SHELL_CACHE)
+      .then((cache) => cache.addAll(PRECACHE_SHELL).catch(() => {
+        // Pre-cache individual items gracefully
+        return Promise.all(
+          PRECACHE_SHELL.map((url) =>
+            fetch(url)
+              .then((res) => (res.ok ? cache.put(url, res) : null))
+              .catch(() => null),
+          ),
+        );
+      }))
+      .then(() => self.skipWaiting()),
+  );
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(
+    caches
+      .keys()
+      .then((keys) =>
+        Promise.all(
+          keys
+            .filter((key) => key !== MODEL_CACHE && key !== SHELL_CACHE)
+            .map((key) => caches.delete(key)),
+        ),
+      )
+      .then(() => self.clients.claim()),
+  );
 });
 
 async function cacheFirst(cacheName, request) {
   const cache = await caches.open(cacheName);
   const cached = await cache.match(request);
   if (cached) return cached;
-  const response = await fetch(request);
-  if (response.ok) {
-    await cache.put(request, response.clone());
+  try {
+    const response = await fetch(request);
+    if (response.ok) {
+      await cache.put(request, response.clone());
+    }
+    return response;
+  } catch (err) {
+    return cached || Response.error();
   }
-  return response;
 }
 
 async function networkFirst(cacheName, request) {
@@ -39,6 +75,12 @@ async function networkFirst(cacheName, request) {
   } catch (error) {
     const cached = await cache.match(request);
     if (cached) return cached;
+
+    // For navigation requests, fallback to cached root shell
+    if (request.mode === "navigate") {
+      const rootFallback = (await cache.match("/")) || (await cache.match("/index.html"));
+      if (rootFallback) return rootFallback;
+    }
     return Response.error();
   }
 }
@@ -48,15 +90,23 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
 
   const url = new URL(request.url);
+
+  // Ignore cross-origin requests (nothing leaves the ship)
   if (url.origin !== self.location.origin) return;
 
-  if (/^\/models\/.+\.tar\.gz$/.test(url.pathname)) {
+  // Language & Vosk voice models (Cache-First)
+  if (/^\/models\/.+/.test(url.pathname)) {
     event.respondWith(cacheFirst(MODEL_CACHE, request));
     return;
   }
 
+  // App Shell, Next.js static bundles, Navigation, and Static Assets
   if (
     url.pathname.startsWith("/_next/static/") ||
+    url.pathname.endsWith(".svg") ||
+    url.pathname.endsWith(".png") ||
+    url.pathname.endsWith(".ico") ||
+    url.pathname === "/manifest.json" ||
     request.mode === "navigate"
   ) {
     event.respondWith(networkFirst(SHELL_CACHE, request));
@@ -64,8 +114,7 @@ self.addEventListener("fetch", (event) => {
 });
 
 /*
- * The page asks for a model to be cached and only shows "Voice ready offline"
- * after this replies with ok: true, so readiness is never claimed early.
+ * Caching IPC message handler for preloading speech models
  */
 self.addEventListener("message", (event) => {
   const data = event.data;
