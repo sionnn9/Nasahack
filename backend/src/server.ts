@@ -9,6 +9,7 @@ import { createBus, type Ctx } from "./context.js";
 import { registerHealth } from "./routes/health.js";
 import { registerLink } from "./routes/link.js";
 import { registerPackets } from "./routes/packets.js";
+import { startScheduler } from "./scheduler.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -19,6 +20,8 @@ declare module "fastify" {
 export type BuildOptions = {
   db?: Db;
   now?: () => Date;
+  /** Tests disable the timer and call runDueTransitions with their own clock. */
+  scheduler?: boolean;
 };
 
 export async function buildApp(
@@ -79,7 +82,10 @@ export async function buildApp(
   registerLink(app, ctx);
   registerPackets(app, ctx);
 
+  const stopScheduler = options.scheduler === false ? null : startScheduler(ctx);
+
   app.addHook("onClose", async () => {
+    stopScheduler?.();
     if (ownsDb) db.close();
   });
 
