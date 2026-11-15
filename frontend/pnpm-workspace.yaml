@@ -1,5 +1,10 @@
 pmOnFail: ignore
 
 minimumReleaseAgeExclude:
-  - '@next/*'
+  - "@next/*"
   - next
+
+allowBuilds:
+  onnxruntime-node: true
+  protobufjs: true
+  sharp: true
